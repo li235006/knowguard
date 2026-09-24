@@ -15,21 +15,54 @@
     - 输出: AsyncEngine, AsyncSession 依赖生成器
 
 作者:
-    System Architect (系统架构组)
+    System Architect (系统架构组) & Backend Team
 """
+
+import sys
+from pathlib import Path
+backend_dir = Path(__file__).resolve().parent.parent.parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
 
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from app.core.config import settings
 
 
 class Base(DeclarativeBase):
-    """SQLAlchemy 2.0 声明式模型基类存根"""
+    """SQLAlchemy 2.0 声明式模型统一基类"""
     pass
+
+
+# 默认配置引擎 (适配 MySQL 8.0+ 异步连接池)
+# 当处于 SQLite 测试环境或特殊 URI 时自动调整 pool 参数
+connect_args = {}
+engine_kwargs = {
+    "echo": settings.DB_ECHO,
+}
+
+if "sqlite" in settings.DATABASE_URL:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
+    engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
+    engine_kwargs["pool_pre_ping"] = True
+
+engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI 依赖注入: 获取异步数据库会话存根 (MySQL 8.0+ 连接池)"""
-    pass
-    yield
-    pass
+    """FastAPI 依赖注入: 获取异步数据库会话"""
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()

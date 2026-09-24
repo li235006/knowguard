@@ -13,18 +13,18 @@ ORM 基础审计模型与通用字段混入 (Base Audit Model)
     System Architect (系统架构组)
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
 
 class BaseModel(Base):
-    """抽象持久化实体基类存根"""
+    """抽象持久化实体基类"""
 
     __abstract__ = True
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
