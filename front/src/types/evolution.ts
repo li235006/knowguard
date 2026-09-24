@@ -40,7 +40,7 @@ export interface KnowledgeGap {
   domain?: string
   department_name?: string
   severity?: 'P1' | 'P2' | 'P3'
-  status: 'OPEN' | 'CONVERTED' | 'DISMISSED'
+  status: 'OPEN' | 'CONVERTED' | 'DISMISSED' | 'RESOLVED' | 'IGNORED'
   reason?: string
   user_id?: number
   first_seen_at?: string

@@ -9,11 +9,32 @@
           <span>知识盲区缺口池</span>
         </span>
         <span class="text-[11px] px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 font-medium border border-rose-100">
-          共 {{ evolutionStore.totalKnowledgeGaps }} 条待补齐缺口
+          共 {{ evolutionStore.totalKnowledgeGaps }} 条缺口记录
         </span>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2.5">
+        <!-- Sort Control -->
+        <div class="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-lg text-xs">
+          <span class="text-slate-500 text-[11px]">排序:</span>
+          <button
+            type="button"
+            class="px-2 py-0.5 rounded text-[11px] font-medium transition-colors"
+            :class="evolutionStore.gapSortBy === 'hit_count' ? 'bg-[#0071E3] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'"
+            @click="setSortBy('hit_count')"
+          >
+            频次最高
+          </button>
+          <button
+            type="button"
+            class="px-2 py-0.5 rounded text-[11px] font-medium transition-colors"
+            :class="evolutionStore.gapSortBy === 'created_at' ? 'bg-[#0071E3] text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'"
+            @click="setSortBy('created_at')"
+          >
+            最新发生
+          </button>
+        </div>
+
         <!-- Status Filter Filter Tabs -->
         <div class="inline-flex p-0.5 bg-slate-100 rounded-lg text-xs font-medium">
           <button
@@ -22,7 +43,7 @@
             :class="evolutionStore.gapStatusFilter === 'ALL' ? 'bg-white text-[#0071E3] shadow-sm' : 'text-slate-600 hover:text-slate-900'"
             @click="setGapFilter('ALL')"
           >
-            全部状态
+            全部
           </button>
           <button
             type="button"
@@ -38,7 +59,23 @@
             :class="evolutionStore.gapStatusFilter === 'CONVERTED' ? 'bg-white text-[#0071E3] shadow-sm' : 'text-slate-600 hover:text-slate-900'"
             @click="setGapFilter('CONVERTED')"
           >
-            已转工单
+            处理中
+          </button>
+          <button
+            type="button"
+            class="px-2.5 py-1 rounded-md transition-colors"
+            :class="evolutionStore.gapStatusFilter === 'RESOLVED' ? 'bg-white text-[#0071E3] shadow-sm' : 'text-slate-600 hover:text-slate-900'"
+            @click="setGapFilter('RESOLVED')"
+          >
+            已闭环
+          </button>
+          <button
+            type="button"
+            class="px-2.5 py-1 rounded-md transition-colors"
+            :class="evolutionStore.gapStatusFilter === 'IGNORED' ? 'bg-white text-[#0071E3] shadow-sm' : 'text-slate-600 hover:text-slate-900'"
+            @click="setGapFilter('IGNORED')"
+          >
+            已忽略
           </button>
         </div>
       </div>
@@ -57,7 +94,7 @@
               <th class="py-3 px-4 w-28">首次发生时间</th>
               <th class="py-3 px-4 w-20 text-center">严重级</th>
               <th class="py-3 px-4 w-24 text-center">闭环状态</th>
-              <th class="py-3 px-4 w-28 text-right">操作</th>
+              <th class="py-3 px-4 w-44 text-right">流转操作</th>
             </tr>
           </thead>
 
@@ -106,7 +143,7 @@
 
               <!-- First Seen -->
               <td class="py-3 px-4 text-[#94A3B8] font-mono text-[11px]">
-                {{ gap.first_seen_at || '09-24 10:00' }}
+                {{ formatTime(gap.first_seen_at || gap.created_at) }}
               </td>
 
               <!-- Severity -->
@@ -123,22 +160,76 @@
               <td class="py-3 px-4 text-center">
                 <span
                   class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium"
-                  :class="gap.status === 'CONVERTED' ? 'bg-blue-50 text-[#0071E3]' : (gap.status === 'DISMISSED' ? 'bg-gray-100 text-gray-500' : 'bg-amber-50 text-amber-700')"
+                  :class="getStatusBadgeClass(gap.status)"
                 >
-                  {{ gap.status === 'CONVERTED' ? '处理中' : (gap.status === 'DISMISSED' ? '已沉淀FAQ' : '待转建') }}
+                  {{ getStatusText(gap.status) }}
                 </span>
               </td>
 
               <!-- Action -->
               <td class="py-3 px-4 text-right whitespace-nowrap">
-                <button
-                  type="button"
-                  class="text-[11px] font-medium inline-flex items-center gap-1 transition-colors"
-                  :class="gap.status === 'CONVERTED' ? 'text-slate-400 hover:text-slate-600' : 'text-[#0071E3] hover:underline'"
-                  @click="evolutionStore.openGapModal(gap)"
-                >
-                  <span>{{ gap.status === 'CONVERTED' ? '查看工单' : '转建工单 →' }}</span>
-                </button>
+                <div class="inline-flex items-center justify-end gap-1.5">
+                  <!-- Case 1: OPEN (待转建) -->
+                  <template v-if="gap.status === 'OPEN'">
+                    <button
+                      type="button"
+                      class="px-2 py-1 text-[11px] font-medium text-white bg-[#0071E3] hover:bg-[#0077ED] rounded transition-colors shadow-2xs"
+                      @click="evolutionStore.openGapModal(gap)"
+                    >
+                      转建工单
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="actionLoadingId === gap.id"
+                      class="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors disabled:opacity-50"
+                      title="标记此问题已闭环"
+                      @click="handleResolve(gap)"
+                    >
+                      解决
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="actionLoadingId === gap.id"
+                      class="px-2 py-1 text-[11px] font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 rounded transition-colors disabled:opacity-50"
+                      title="忽略此缺口提问"
+                      @click="handleIgnore(gap)"
+                    >
+                      忽略
+                    </button>
+                  </template>
+
+                  <!-- Case 2: CONVERTED (处理中) -->
+                  <template v-else-if="gap.status === 'CONVERTED'">
+                    <button
+                      type="button"
+                      class="px-2 py-1 text-[11px] font-medium text-blue-600 hover:text-blue-800 transition-colors"
+                      @click="evolutionStore.openGapModal(gap)"
+                    >
+                      查看工单
+                    </button>
+                    <button
+                      type="button"
+                      :disabled="actionLoadingId === gap.id"
+                      class="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors disabled:opacity-50"
+                      @click="handleResolve(gap)"
+                    >
+                      完成闭环
+                    </button>
+                  </template>
+
+                  <!-- Case 3: RESOLVED (已解决) -->
+                  <template v-else-if="gap.status === 'RESOLVED'">
+                    <span class="text-[11px] text-emerald-600 font-medium inline-flex items-center gap-1">
+                      <Check :size="12" />
+                      <span>已闭环</span>
+                    </span>
+                  </template>
+
+                  <!-- Case 4: IGNORED (已忽略) -->
+                  <template v-else-if="gap.status === 'IGNORED' || gap.status === 'DISMISSED'">
+                    <span class="text-[11px] text-slate-400 font-medium">已归档忽略</span>
+                  </template>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -151,7 +242,7 @@
                   <div class="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
                     <CheckCircle2 :size="24" />
                   </div>
-                  <span class="font-medium text-slate-600">当前无待处理的知识缺口</span>
+                  <span class="font-medium text-slate-600">当前分类无知识缺口记录</span>
                   <span class="text-slate-400 text-[11px]">所有未命中提问均已完成工单闭环或转建为官方 FAQ</span>
                 </div>
               </td>
@@ -166,7 +257,7 @@
         class="p-3 border-t border-[#F1F5F9] bg-[#FAFAFA]/60 flex items-center justify-between text-xs text-[#64748B]"
       >
         <div>
-          共 <span class="font-medium text-[#0F172A]">{{ evolutionStore.totalKnowledgeGaps }}</span> 个盲区问题
+          共 <span class="font-medium text-[#0F172A]">{{ evolutionStore.totalKnowledgeGaps }}</span> 个缺口问题
         </div>
         <div class="flex items-center gap-2">
           <button
@@ -198,18 +289,64 @@
  * 模块: FE-M5 (PAGE-06)
  */
 
-import { AlertCircle, CheckCircle2 } from 'lucide-vue-next'
+import { ref } from 'vue'
+import { AlertCircle, CheckCircle2, Check } from 'lucide-vue-next'
 import { useEvolutionStore } from '@/stores/evolution'
+import type { KnowledgeGap } from '@/types/evolution'
 
 const evolutionStore = useEvolutionStore()
+
+const emit = defineEmits<{
+  (e: 'toast', msg: string, type?: 'success' | 'error'): void
+}>()
+
+const actionLoadingId = ref<number | null>(null)
 
 const setGapFilter = (status: string) => {
   evolutionStore.gapStatusFilter = status
   evolutionStore.fetchKnowledgeGaps(1)
 }
 
+const setSortBy = (sortBy: 'hit_count' | 'created_at') => {
+  evolutionStore.gapSortBy = sortBy
+  evolutionStore.fetchKnowledgeGaps(1)
+}
+
 const changePage = (page: number) => {
   evolutionStore.fetchKnowledgeGaps(page)
+}
+
+const handleResolve = async (gap: KnowledgeGap) => {
+  actionLoadingId.value = gap.id
+  try {
+    await evolutionStore.resolveKnowledgeGap(gap.id)
+    emit('toast', `知识缺口 [${gap.query_text}] 已成功标记为解决闭环`, 'success')
+  } catch (err) {
+    emit('toast', err instanceof Error ? err.message : '标记解决失败', 'error')
+  } finally {
+    actionLoadingId.value = null
+  }
+}
+
+const handleIgnore = async (gap: KnowledgeGap) => {
+  actionLoadingId.value = gap.id
+  try {
+    await evolutionStore.ignoreKnowledgeGap(gap.id)
+    emit('toast', `知识缺口 [${gap.query_text}] 已成功忽略并归档`, 'success')
+  } catch (err) {
+    emit('toast', err instanceof Error ? err.message : '忽略失败', 'error')
+  } finally {
+    actionLoadingId.value = null
+  }
+}
+
+const formatTime = (timeStr?: string): string => {
+  if (!timeStr) return '09-24 10:00'
+  try {
+    return timeStr.replace('T', ' ').substring(5, 16)
+  } catch {
+    return timeStr
+  }
 }
 
 const getSeverityClass = (sev: string): string => {
@@ -220,6 +357,37 @@ const getSeverityClass = (sev: string): string => {
       return 'bg-amber-100 text-amber-800 border border-amber-200'
     default:
       return 'bg-slate-100 text-slate-700 border border-slate-200'
+  }
+}
+
+const getStatusBadgeClass = (status: string): string => {
+  switch (status) {
+    case 'CONVERTED':
+      return 'bg-blue-50 text-[#0071E3] border border-blue-200'
+    case 'RESOLVED':
+      return 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+    case 'IGNORED':
+    case 'DISMISSED':
+      return 'bg-slate-100 text-slate-500 border border-slate-200'
+    case 'OPEN':
+    default:
+      return 'bg-amber-50 text-amber-700 border border-amber-200'
+  }
+}
+
+const getStatusText = (status: string): string => {
+  switch (status) {
+    case 'CONVERTED':
+      return '处理中'
+    case 'RESOLVED':
+      return '已闭环'
+    case 'IGNORED':
+      return '已忽略'
+    case 'DISMISSED':
+      return '已沉淀FAQ'
+    case 'OPEN':
+    default:
+      return '待转建'
   }
 }
 </script>

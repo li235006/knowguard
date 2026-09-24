@@ -117,10 +117,91 @@ class KnowledgeGapResponse(BaseModel):
 
     id: int = Field(..., description="主键ID")
     query_text: str = Field(..., description="未命中或受限问题文本")
+    question: Optional[str] = Field(default=None, description="问题文本 (对齐 MVP 8.4 别名)")
+    query: Optional[str] = Field(default=None, description="问题文本 (别名)")
     hit_count: int = Field(default=1, description="累计受限/未命中频次")
-    status: str = Field(default="OPEN", description="处理状态: OPEN/CONVERTED/DISMISSED")
+    frequency: Optional[int] = Field(default=None, description="频次 (对齐 MVP 8.4 别名)")
+    status: str = Field(default="OPEN", description="处理状态: OPEN/CONVERTED/DISMISSED/RESOLVED/IGNORED")
+    reason: Optional[str] = Field(default=None, description="成因")
     first_seen_at: Optional[datetime] = Field(default=None, description="首次出现时间")
     last_seen_at: Optional[datetime] = Field(default=None, description="最后出现时间")
+    last_asked_at: Optional[datetime] = Field(default=None, description="最后提问时间 (对齐 MVP 8.4 别名)")
+    created_at: Optional[datetime] = Field(default=None, description="创建时间")
+    updated_at: Optional[datetime] = Field(default=None, description="更新时间")
+
+    @model_validator(mode="after")
+    def sync_aliases(self) -> "KnowledgeGapResponse":
+        text = self.query_text or self.question or self.query
+        if text:
+            if not self.query_text:
+                self.query_text = text
+            if not self.question:
+                self.question = text
+            if not self.query:
+                self.query = text
+
+        freq = self.hit_count if self.hit_count is not None else self.frequency
+        if freq is not None:
+            self.hit_count = freq
+            self.frequency = freq
+
+        last_time = self.last_seen_at or self.last_asked_at
+        if last_time:
+            self.last_seen_at = last_time
+            self.last_asked_at = last_time
+
+        return self
+
+
+class KnowledgeGapCreateRequest(BaseModel):
+    """手动或系统录入知识缺口入参"""
+    question: Optional[str] = Field(default=None, description="缺口问题文本 (别名)")
+    query: Optional[str] = Field(default=None, description="缺口问题文本")
+    query_text: Optional[str] = Field(default=None, description="缺口问题文本 (别名)")
+    reason: Optional[str] = Field(default="NO_HITS", description="缺口成因")
+    user_id: Optional[int] = Field(default=None, description="上报或提问员工ID")
+
+    @model_validator(mode="after")
+    def sync_names(self) -> "KnowledgeGapCreateRequest":
+        text = self.question or self.query or self.query_text
+        if text:
+            self.question = text
+            self.query = text
+            self.query_text = text
+        return self
+
+
+class KnowledgeGapResolveRequest(BaseModel):
+    """解决知识缺口入参"""
+    solution: Optional[str] = Field(default=None, description="解决方案或答复说明")
+    notes: Optional[str] = Field(default=None, description="补充备注")
+    assignee: Optional[str] = Field(default=None, description="责任处理人")
+
+
+class KnowledgeGapIgnoreRequest(BaseModel):
+    """忽略知识缺口入参"""
+    reason: Optional[str] = Field(default=None, description="忽略或驳回原因说明")
+
+
+class KnowledgeGapActionRequest(BaseModel):
+    """缺口流转/操作入参"""
+    reason: Optional[str] = Field(default=None, description="处理或忽略原因")
+    note: Optional[str] = Field(default=None, description="备注说明")
+    solution: Optional[str] = Field(default=None, description="解决方案")
+    title: Optional[str] = Field(default=None, description="工单标题")
+    domain: Optional[str] = Field(default=None, description="业务领域")
+    assignee: Optional[str] = Field(default=None, description="指派责任人")
+    converted_faq_id: Optional[int] = Field(default=None, description="关联转建的 FAQ ID")
+
+
+class KnowledgeGapConvertRequest(BaseModel):
+    """缺口转建工单入参"""
+    title: Optional[str] = Field(default=None, description="工单标题")
+    domain: Optional[str] = Field(default=None, description="业务领域")
+    assignee: Optional[str] = Field(default=None, description="指派责任人")
+    deadline: Optional[str] = Field(default=None, description="截止时间")
+    priority: Optional[str] = Field(default=None, description="优先级")
+    notes: Optional[str] = Field(default=None, description="补全说明")
 
 
 class ClusterMiningRequest(BaseModel):

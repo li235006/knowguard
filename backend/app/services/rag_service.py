@@ -228,6 +228,19 @@ class RAGService:
             except Exception as e:
                 logger.error(f"[RAGService] Failed to persist fallback message: {e}")
 
+            # 自动捕获并记录知识缺口 (Knowledge Gap)
+            try:
+                from app.services.evolution_service import EvolutionService
+                evolution_svc = EvolutionService(db=self.db)
+                reason = "PERMISSION_RESTRICTED" if restricted_chunk_ids else "NO_HITS"
+                await evolution_svc.record_knowledge_gap(
+                    query=clean_query,
+                    user_id=user_context.user_id if user_context else None,
+                    reason=reason,
+                )
+            except Exception as gap_err:
+                logger.warning(f"[RAGService] Record knowledge gap warning: {gap_err}")
+
             # 发送完成帧并安全退出，绝不泄露受限切片信息
             yield ChatEventPayload(
                 event="done",
@@ -476,7 +489,17 @@ if __name__ == "__main__":
 
             assert "未检索到相匹配的公开或授权参考资料" in reconstructed_text, "必须触发高情商静默兜底"
             assert "核心财务薪资报表" not in fallback_sse_text, "绝不可泄露未授权文档名称"
-            print("[Self-Test] Case 2 Silent Fallback passed with 0 sensitive leakage!")
+
+            # 校验自动捕获知识缺口记录
+            from app.models.evolution import KnowledgeGap
+            recorded_gap = (await session.execute(
+                select(KnowledgeGap).where(KnowledgeGap.query_text == "高管薪资期权机密方案是什么？")
+            )).scalar_one_or_none()
+            assert recorded_gap is not None, "SilentFallback 必须自动捕获沉淀知识缺口"
+            assert recorded_gap.hit_count >= 1
+            assert recorded_gap.frequency >= 1
+            assert recorded_gap.reason == "PERMISSION_RESTRICTED"
+            print(f"[Self-Test] Case 2 Silent Fallback passed with 0 sensitive leakage & Auto Gap ID={recorded_gap.id} verified!")
 
             # 4. 多轮对话与历史持久化断言：验证会话消息落地与第二轮追问
             print("[Self-Test] Testing Case 3: Multi-turn history and message persistence...")

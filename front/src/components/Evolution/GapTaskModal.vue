@@ -114,15 +114,27 @@
           >
             取消
           </button>
-          <button
-            type="button"
-            :disabled="!ticketForm.title.trim() || !ticketForm.assignee.trim() || isSubmitting"
-            class="px-5 py-2 text-xs bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg font-medium transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 shadow-sm"
-            @click="submitTicket"
-          >
-            <Send :size="13" />
-            <span>{{ isSubmitting ? '下发中...' : `立即下发工单 (通知${ticketForm.assignee.split('·')[0].trim() || '责任人'})` }}</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              v-if="currentGap?.status === 'CONVERTED'"
+              type="button"
+              :disabled="isSubmitting"
+              class="px-3.5 py-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 shadow-sm"
+              @click="markResolved"
+            >
+              <Check :size="13" />
+              <span>标记闭环完成</span>
+            </button>
+            <button
+              type="button"
+              :disabled="!ticketForm.title.trim() || !ticketForm.assignee.trim() || isSubmitting"
+              class="px-5 py-2 text-xs bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg font-medium transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 shadow-sm"
+              @click="submitTicket"
+            >
+              <Send :size="13" />
+              <span>{{ isSubmitting ? '下发中...' : (currentGap?.status === 'CONVERTED' ? '更新并重新下发' : `立即下发工单 (通知${ticketForm.assignee.split('·')[0].trim() || '责任人'})`) }}</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -136,7 +148,7 @@
  */
 
 import { ref, reactive, computed, watch } from 'vue'
-import { X, User, Calendar, Send } from 'lucide-vue-next'
+import { X, User, Calendar, Send, Check } from 'lucide-vue-next'
 import { useEvolutionStore } from '@/stores/evolution'
 
 const evolutionStore = useEvolutionStore()
@@ -193,6 +205,20 @@ const submitTicket = async () => {
     closeModal()
   } catch (err) {
     emit('toast', err instanceof Error ? err.message : '工单下发失败', 'error')
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+const markResolved = async () => {
+  if (!currentGap.value) return
+  isSubmitting.value = true
+  try {
+    await evolutionStore.resolveKnowledgeGap(currentGap.value.id)
+    emit('toast', `知识缺口 [${currentGap.value.query_text}] 已成功标记为闭环`, 'success')
+    closeModal()
+  } catch (err) {
+    emit('toast', err instanceof Error ? err.message : '标记闭环失败', 'error')
   } finally {
     isSubmitting.value = false
   }

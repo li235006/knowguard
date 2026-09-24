@@ -383,6 +383,164 @@ class EvolutionService:
 
         return None
 
+    # ==================== 4. 知识缺口流转闭环 ====================
+
+    async def record_knowledge_gap(
+        self,
+        query: str,
+        user_id: Optional[int] = None,
+        reason: str = "NO_HITS",
+    ) -> Optional[KnowledgeGap]:
+        """
+        自动捕获或更新知识盲区与缺口:
+        1. 针对 query 进行去重查找 (已存在且处于 OPEN / PENDING 状态的缺口)
+        2. 若已存在：累加 hit_count (+1)，更新 last_seen_at
+        3. 若不存在：新建缺口记录，初始 hit_count=1，状态 OPEN
+        """
+        clean_q = query.strip() if query else ""
+        if not clean_q:
+            return None
+
+        # 查找未解决状态下的相同提问记录 (不区分大小写，自动去重)
+        stmt = (
+            select(KnowledgeGap)
+            .where(
+                KnowledgeGap.is_deleted == False,
+                func.lower(KnowledgeGap.query_text) == clean_q.lower(),
+                KnowledgeGap.status.in_(["OPEN", "PENDING"]),
+            )
+            .order_by(KnowledgeGap.id.desc())
+        )
+        res = await self.db.execute(stmt)
+        gap = res.scalars().first()
+
+        now = datetime.now(timezone.utc)
+        if gap:
+            gap.hit_count += 1
+            gap.last_seen_at = now
+            gap.updated_at = now
+            if reason and gap.reason == "NO_HITS" and reason != "NO_HITS":
+                gap.reason = reason
+            await self.db.commit()
+            await self.db.refresh(gap)
+            logger.info(f"[EvolutionService] 知识缺口频次累加: '{clean_q}' -> {gap.hit_count}")
+            return gap
+        else:
+            gap = KnowledgeGap(
+                query_text=clean_q,
+                hit_count=1,
+                user_id=user_id,
+                reason=reason,
+                status="OPEN",
+                first_seen_at=now,
+                last_seen_at=now,
+            )
+            self.db.add(gap)
+            await self.db.commit()
+            await self.db.refresh(gap)
+            logger.info(f"[EvolutionService] 捕获新知识缺口: ID={gap.id}, query='{clean_q}', reason={reason}")
+            return gap
+
+    async def list_knowledge_gaps(
+        self,
+        page: int = 1,
+        page_size: int = 10,
+        status: Optional[str] = None,
+        sort_by: str = "frequency",
+        order: str = "desc",
+        keyword: Optional[str] = None,
+    ) -> Tuple[List[KnowledgeGap], int]:
+        """分页与排序查询知识盲区与缺口清单"""
+        stmt = select(KnowledgeGap).where(KnowledgeGap.is_deleted == False)
+        count_stmt = select(func.count(KnowledgeGap.id)).where(KnowledgeGap.is_deleted == False)
+
+        if status and status.upper() != "ALL":
+            target_status = status.upper()
+            if target_status == "RESOLVED":
+                stmt = stmt.where(KnowledgeGap.status.in_(["RESOLVED", "CONVERTED"]))
+                count_stmt = count_stmt.where(KnowledgeGap.status.in_(["RESOLVED", "CONVERTED"]))
+            elif target_status == "IGNORED":
+                stmt = stmt.where(KnowledgeGap.status.in_(["IGNORED", "DISMISSED"]))
+                count_stmt = count_stmt.where(KnowledgeGap.status.in_(["IGNORED", "DISMISSED"]))
+            else:
+                stmt = stmt.where(KnowledgeGap.status == target_status)
+                count_stmt = count_stmt.where(KnowledgeGap.status == target_status)
+
+        if keyword and keyword.strip():
+            kw = f"%{keyword.strip()}%"
+            stmt = stmt.where(KnowledgeGap.query_text.ilike(kw))
+            count_stmt = count_stmt.where(KnowledgeGap.query_text.ilike(kw))
+
+        total_res = await self.db.execute(count_stmt)
+        total = total_res.scalar() or 0
+
+        # 排序
+        sort_col = KnowledgeGap.hit_count
+        if sort_by in ("frequency", "hit_count", "count"):
+            sort_col = KnowledgeGap.hit_count
+        elif sort_by in ("created_at", "create_time"):
+            sort_col = KnowledgeGap.created_at
+        elif sort_by in ("last_seen_at", "last_asked_at", "update_time"):
+            sort_col = KnowledgeGap.last_seen_at
+
+        if order.lower() == "asc":
+            stmt = stmt.order_by(sort_col.asc(), KnowledgeGap.id.asc())
+        else:
+            stmt = stmt.order_by(sort_col.desc(), KnowledgeGap.id.desc())
+
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        res = await self.db.execute(stmt)
+        return list(res.scalars().all()), total
+
+    # 方法别名
+    list_gaps = list_knowledge_gaps
+
+    async def get_gap_by_id(self, gap_id: int) -> KnowledgeGap:
+        """根据 ID 查询知识缺口详情"""
+        gap = await self.db.get(KnowledgeGap, gap_id)
+        if not gap or gap.is_deleted:
+            raise EntityNotFoundError(message=f"知识缺口 ID {gap_id} 不存在", code=40401)
+        return gap
+
+    async def resolve_gap(self, gap_id: int) -> KnowledgeGap:
+        """标记知识缺口已转建工单/已解决"""
+        gap = await self.db.get(KnowledgeGap, gap_id)
+        if not gap or gap.is_deleted:
+            raise EntityNotFoundError(message=f"知识缺口 ID {gap_id} 不存在", code=40401)
+        gap.status = "RESOLVED"
+        gap.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(gap)
+        return gap
+
+    async def ignore_gap(self, gap_id: int) -> KnowledgeGap:
+        """忽略/驳回知识缺口"""
+        gap = await self.db.get(KnowledgeGap, gap_id)
+        if not gap or gap.is_deleted:
+            raise EntityNotFoundError(message=f"知识缺口 ID {gap_id} 不存在", code=40401)
+        gap.status = "IGNORED"
+        gap.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(gap)
+        return gap
+
+    async def convert_gap(self, gap_id: int, payload: Any = None) -> KnowledgeGap:
+        """知识缺口一键转建工单"""
+        gap = await self.db.get(KnowledgeGap, gap_id)
+        if not gap or gap.is_deleted:
+            raise EntityNotFoundError(message=f"知识缺口 ID {gap_id} 不存在", code=40401)
+        gap.status = "CONVERTED"
+        gap.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(gap)
+        return gap
+
+    # 知识缺口方法规范别名 (对齐 P2-2 契约)
+    resolve_knowledge_gap = resolve_gap
+    ignore_knowledge_gap = ignore_gap
+    convert_knowledge_gap = convert_gap
+    get_knowledge_gap = get_gap_by_id
+
 
 
 if __name__ == "__main__":
@@ -467,6 +625,40 @@ if __name__ == "__main__":
             miss_after_disable = await service.match_faq_cache(test_query, threshold=0.92)
             assert miss_after_disable is None, "已停用的 FAQ 不得参与前置缓存直出"
             print(f"[Self-Test] FAQ Disabled & Cache bypassed verified.")
+
+            # 6. 验证知识盲区与缺口流转闭环 (P2-2 Knowledge Gap)
+            gap1 = await service.record_knowledge_gap("如何申请2026年海外商务签证？", user_id=1001, reason="NO_HITS")
+            assert gap1.id is not None
+            assert gap1.hit_count == 1
+            assert gap1.frequency == 1
+            assert gap1.question == "如何申请2026年海外商务签证？"
+            assert gap1.status == "OPEN"
+
+            # 再次提问相同问题 -> 触发去重与频次累加
+            gap1_again = await service.record_knowledge_gap("如何申请2026年海外商务签证？", user_id=1002, reason="NO_HITS")
+            assert gap1_again.id == gap1.id
+            assert gap1_again.hit_count == 2
+            assert gap1_again.frequency == 2
+
+            # 记录另一个缺口
+            gap2 = await service.record_knowledge_gap("公司跨境资金调拨审计指引", user_id=1003, reason="PERMISSION_RESTRICTED")
+            assert gap2.id != gap1.id
+            assert gap2.reason == "PERMISSION_RESTRICTED"
+
+            # 列表查询验证 (按 frequency 倒序)
+            gaps, total_gaps = await service.list_knowledge_gaps(page=1, page_size=10, sort_by="frequency", order="desc")
+            assert total_gaps == 2
+            assert gaps[0].id == gap1.id  # hit_count = 2 排在第一位
+            assert gaps[1].id == gap2.id  # hit_count = 1
+
+            # 解决缺口 (resolve)
+            resolved_gap = await service.resolve_knowledge_gap(gap1.id)
+            assert resolved_gap.status == "RESOLVED"
+
+            # 忽略缺口 (ignore)
+            ignored_gap = await service.ignore_knowledge_gap(gap2.id)
+            assert ignored_gap.status == "IGNORED"
+            print(f"[Self-Test] Knowledge Gap Lifecycle (Record, Deduplicate, List, Resolve, Ignore) verified successfully.")
 
         await test_engine.dispose()
         print("=== [Self-Test] All EvolutionService tests PASSED successfully! ===")

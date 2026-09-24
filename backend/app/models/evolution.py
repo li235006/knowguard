@@ -24,9 +24,10 @@ from typing import List, Optional
 from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import BaseModel
+EvolutionBaseModel = BaseModel
 
 
-class FAQ(BaseModel):
+class FAQ(EvolutionBaseModel):
     """官方标准 FAQ 实体 (表名: faqs, 严格对齐 MVP 8.4 节)"""
     __tablename__ = "faqs"
     __table_args__ = {"extend_existing": True}
@@ -45,7 +46,7 @@ class FAQ(BaseModel):
 FAQItem = FAQ
 
 
-class FAQCandidate(BaseModel):
+class FAQCandidate(EvolutionBaseModel):
     """高频挖掘候选 FAQ 实体 (表名: faq_candidates, 严格对齐 MVP 8.4 节)"""
     __tablename__ = "faq_candidates"
     __table_args__ = {"extend_existing": True}
@@ -67,18 +68,50 @@ class FAQCandidate(BaseModel):
         self.sample_queries = val
 
 
-class KnowledgeGap(BaseModel):
-    """知识盲区与缺口工单实体 (表名: knowledge_gaps)"""
+class KnowledgeGap(EvolutionBaseModel):
+    """知识盲区与缺口工单实体 (表名: knowledge_gaps, 严格对齐 MVP 8.4 节)"""
     __tablename__ = "knowledge_gaps"
     __table_args__ = {"extend_existing": True}
 
     query_text: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     hit_count: Mapped[int] = mapped_column(Integer, default=1)
     user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    reason: Mapped[str] = mapped_column(String(64), default="MISSING_KNOWLEDGE")
-    status: Mapped[str] = mapped_column(String(32), default="OPEN")  # OPEN, CONVERTED, DISMISSED
+    reason: Mapped[str] = mapped_column(String(64), default="NO_HITS")
+    status: Mapped[str] = mapped_column(String(32), default="OPEN")  # OPEN, RESOLVED, IGNORED, CONVERTED
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    @property
+    def question(self) -> str:
+        return self.query_text
+
+    @question.setter
+    def question(self, val: str):
+        self.query_text = val
+
+    @property
+    def query(self) -> str:
+        return self.query_text
+
+    @query.setter
+    def query(self, val: str):
+        self.query_text = val
+
+    @property
+    def frequency(self) -> int:
+        return self.hit_count
+
+    @frequency.setter
+    def frequency(self, val: int):
+        self.hit_count = val
+
+    @property
+    def last_asked_at(self) -> datetime:
+        return self.last_seen_at
+
+    @last_asked_at.setter
+    def last_asked_at(self, val: datetime):
+        self.last_seen_at = val
 
 
 if __name__ == "__main__":
@@ -131,10 +164,13 @@ if __name__ == "__main__":
         session.flush()
         assert gap.id is not None
         assert gap.__tablename__ == "knowledge_gaps"
+        assert gap.question == "2026年境外股票投资合规政策"
+        assert gap.frequency == 3
+        assert gap.last_asked_at is not None
 
         session.commit()
         print(f"[Self-Test] FAQ created: ID={faq.id}, table={faq.__tablename__}")
         print(f"[Self-Test] FAQCandidate created: ID={cand.id}, table={cand.__tablename__}")
-        print(f"[Self-Test] KnowledgeGap created: ID={gap.id}, table={gap.__tablename__}")
+        print(f"[Self-Test] KnowledgeGap created: ID={gap.id}, table={gap.__tablename__}, question={gap.question}, freq={gap.frequency}")
 
     print("=== [Self-Test] All Evolution Models tests PASSED successfully! ===")

@@ -28,6 +28,8 @@ import {
   deleteFaqApi,
   getKnowledgeGapsApi,
   convertKnowledgeGapApi,
+  resolveKnowledgeGapApi,
+  ignoreKnowledgeGapApi,
   triggerClusterMiningApi,
   getEvolutionMetricsApi
 } from '@/api/evolution'
@@ -66,6 +68,8 @@ export const useEvolutionStore = defineStore('evolution', () => {
   const gapsPage = ref<number>(1)
   const gapsPageSize = ref<number>(10)
   const gapStatusFilter = ref<string>('ALL')
+  const gapSortBy = ref<string>('hit_count')
+  const gapSortOrder = ref<'asc' | 'desc'>('desc')
 
   // 全局交互与抽屉/弹窗状态
   const searchKeyword = ref<string>('')
@@ -200,7 +204,9 @@ export const useEvolutionStore = defineStore('evolution', () => {
         page,
         page_size: gapsPageSize.value,
         status: gapStatusFilter.value,
-        keyword: searchKeyword.value
+        keyword: searchKeyword.value,
+        sort_by: gapSortBy.value,
+        order: gapSortOrder.value
       })
       if (res && res.data) {
         knowledgeGaps.value = res.data.items || []
@@ -216,6 +222,23 @@ export const useEvolutionStore = defineStore('evolution', () => {
     const res = await convertKnowledgeGapApi(gapId, payload)
     if (!res) throw new Error('工单转建下发失败')
     await Promise.all([fetchKnowledgeGaps(gapsPage.value), fetchMetrics()])
+    return res.data
+  }
+
+  // 13. 标记知识缺口已解决
+  const resolveKnowledgeGap = async (gapId: number) => {
+    const res = await resolveKnowledgeGapApi(gapId)
+    if (!res) throw new Error('标记缺口已解决失败')
+    await Promise.all([fetchKnowledgeGaps(gapsPage.value), fetchMetrics()])
+    return res.data
+  }
+
+  // 14. 忽略知识缺口
+  const ignoreKnowledgeGap = async (gapId: number) => {
+    const res = await ignoreKnowledgeGapApi(gapId)
+    if (!res) throw new Error('忽略缺口失败')
+    await Promise.all([fetchKnowledgeGaps(gapsPage.value), fetchMetrics()])
+    return res.data
   }
 
   // 13. 触发提问聚类挖掘
@@ -260,6 +283,8 @@ export const useEvolutionStore = defineStore('evolution', () => {
     gapsPage,
     gapsPageSize,
     gapStatusFilter,
+    gapSortBy,
+    gapSortOrder,
     searchKeyword,
     isLoading,
     isMining,
@@ -279,6 +304,8 @@ export const useEvolutionStore = defineStore('evolution', () => {
     deleteFaq,
     fetchKnowledgeGaps,
     convertKnowledgeGap,
+    resolveKnowledgeGap,
+    ignoreKnowledgeGap,
     triggerMining,
     openEditDrawer,
     openGapModal

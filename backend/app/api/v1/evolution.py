@@ -27,7 +27,7 @@ if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,10 @@ from app.schemas.evolution import (
     FAQMatchResponse,
     FAQResponse,
     FAQStatusUpdate,
+    KnowledgeGapActionRequest,
+    KnowledgeGapCreateRequest,
     KnowledgeGapResponse,
+    KnowledgeGapConvertRequest,
 )
 from app.services.evolution_service import EvolutionService
 
@@ -252,28 +255,29 @@ async def match_faq(
     )
 
 
+@router.get("/gaps", response_model=StandardResponse[PaginatedResponse[KnowledgeGapResponse]])
 @router.get("/knowledge-gaps", response_model=StandardResponse[PaginatedResponse[KnowledgeGapResponse]])
 async def list_knowledge_gaps(
     request: Request,
     page: int = Query(1, ge=1, description="当前页码"),
     page_size: int = Query(10, ge=1, le=100, description="每页记录数"),
+    status: Optional[str] = Query(None, description="状态筛选: OPEN/CONVERTED/RESOLVED/IGNORED/ALL"),
+    sort_by: str = Query("frequency", description="排序字段: frequency/hit_count/created_at/last_seen_at"),
+    order: str = Query("desc", description="排序方向: asc/desc"),
+    keyword: Optional[str] = Query(None, description="搜索关键词"),
     db: AsyncSession = Depends(get_db),
 ):
-    """查询知识盲区与缺口清单"""
+    """查询知识盲区与缺口清单 (支持按频次排序与状态筛选)"""
     trace_id = getattr(request.state, "trace_id", None)
-    count_stmt = select(func.count(KnowledgeGap.id)).where(KnowledgeGap.is_deleted == False)
-    total_res = await db.execute(count_stmt)
-    total = total_res.scalar() or 0
-
-    stmt = (
-        select(KnowledgeGap)
-        .where(KnowledgeGap.is_deleted == False)
-        .order_by(KnowledgeGap.hit_count.desc(), KnowledgeGap.id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    service = EvolutionService(db)
+    items, total = await service.list_knowledge_gaps(
+        page=page,
+        page_size=page_size,
+        status=status,
+        sort_by=sort_by,
+        order=order,
+        keyword=keyword,
     )
-    res = await db.execute(stmt)
-    items = res.scalars().all()
 
     return StandardResponse(
         code=200,
@@ -284,6 +288,111 @@ async def list_knowledge_gaps(
             page=page,
             page_size=page_size,
         ),
+        trace_id=trace_id,
+    )
+
+
+@router.post("/gaps", response_model=StandardResponse[KnowledgeGapResponse])
+@router.post("/knowledge-gaps", response_model=StandardResponse[KnowledgeGapResponse])
+async def create_knowledge_gap(
+    payload: KnowledgeGapCreateRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """手动或系统记录知识缺口 (自动去重并累加频次)"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = EvolutionService(db)
+    q = payload.query or payload.query_text
+    gap = await service.record_knowledge_gap(
+        query=q,
+        user_id=payload.user_id,
+        reason=payload.reason or "NO_HITS",
+    )
+    return StandardResponse(
+        code=200,
+        message="知识缺口记录成功",
+        data=KnowledgeGapResponse.model_validate(gap),
+        trace_id=trace_id,
+    )
+
+
+@router.get("/gaps/{gap_id}", response_model=StandardResponse[KnowledgeGapResponse])
+@router.get("/knowledge-gaps/{gap_id}", response_model=StandardResponse[KnowledgeGapResponse])
+async def get_knowledge_gap(
+    gap_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取指定知识缺口详情"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = EvolutionService(db)
+    gap = await service.get_gap_by_id(gap_id)
+    return StandardResponse(
+        code=200,
+        message="获取知识缺口成功",
+        data=KnowledgeGapResponse.model_validate(gap),
+        trace_id=trace_id,
+    )
+
+
+@router.post("/gaps/{gap_id}/resolve", response_model=StandardResponse[KnowledgeGapResponse])
+@router.post("/knowledge-gaps/{gap_id}/resolve", response_model=StandardResponse[KnowledgeGapResponse])
+async def resolve_knowledge_gap(
+    gap_id: int,
+    request: Request,
+    payload: Optional[KnowledgeGapActionRequest] = Body(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """标记知识缺口为已解决/闭环"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = EvolutionService(db)
+    gap = await service.resolve_gap(gap_id)
+    return StandardResponse(
+        code=200,
+        message="知识缺口已标记解决",
+        data=KnowledgeGapResponse.model_validate(gap),
+        trace_id=trace_id,
+    )
+
+
+@router.post("/gaps/{gap_id}/ignore", response_model=StandardResponse[KnowledgeGapResponse])
+@router.post("/knowledge-gaps/{gap_id}/ignore", response_model=StandardResponse[KnowledgeGapResponse])
+@router.post("/gaps/{gap_id}/dismiss", response_model=StandardResponse[KnowledgeGapResponse])
+@router.post("/knowledge-gaps/{gap_id}/dismiss", response_model=StandardResponse[KnowledgeGapResponse])
+async def ignore_knowledge_gap(
+    gap_id: int,
+    request: Request,
+    payload: Optional[KnowledgeGapActionRequest] = Body(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """忽略/驳回知识缺口"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = EvolutionService(db)
+    gap = await service.ignore_gap(gap_id)
+    return StandardResponse(
+        code=200,
+        message="知识缺口已忽略",
+        data=KnowledgeGapResponse.model_validate(gap),
+        trace_id=trace_id,
+    )
+
+
+@router.post("/gaps/{gap_id}/convert", response_model=StandardResponse[KnowledgeGapResponse])
+@router.post("/knowledge-gaps/{gap_id}/convert", response_model=StandardResponse[KnowledgeGapResponse])
+async def convert_knowledge_gap(
+    gap_id: int,
+    request: Request,
+    payload: Optional[KnowledgeGapConvertRequest] = Body(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """知识缺口一键转建为补齐工单"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = EvolutionService(db)
+    gap = await service.convert_gap(gap_id, payload)
+    return StandardResponse(
+        code=200,
+        message="知识缺口已转建工单",
+        data=KnowledgeGapResponse.model_validate(gap),
         trace_id=trace_id,
     )
 
@@ -377,10 +486,37 @@ if __name__ == "__main__":
                 assert match_res.json()["data"]["hit"] is True
                 print("[Self-Test] POST /faqs/match verified.")
 
-                # 8. GET /knowledge-gaps
-                gap_res = await ac.get("/api/v1/evolution/knowledge-gaps?page=1&page_size=10")
+                # 8. POST /gaps (新增知识缺口)
+                create_gap_res = await ac.post("/api/v1/evolution/gaps", json={
+                    "query": "2026境外直接投资合规指引",
+                    "reason": "NO_HITS",
+                })
+                assert create_gap_res.status_code == 200
+                gap_data = create_gap_res.json()["data"]
+                gap_id = gap_data["id"]
+                assert gap_data["frequency"] == 1
+                assert gap_data["question"] == "2026境外直接投资合规指引"
+                print(f"[Self-Test] POST /gaps succeeded: ID={gap_id}")
+
+                # 9. GET /gaps (支持频次倒序与关键词筛选)
+                gap_res = await ac.get("/api/v1/evolution/gaps?page=1&page_size=10&keyword=境外")
                 assert gap_res.status_code == 200
-                print("[Self-Test] GET /knowledge-gaps verified.")
+                assert gap_res.json()["data"]["total"] >= 1
+                print("[Self-Test] GET /gaps verified.")
+
+                # 10. POST /gaps/{id}/resolve
+                resolve_res = await ac.post(f"/api/v1/evolution/gaps/{gap_id}/resolve")
+                assert resolve_res.status_code == 200
+                assert resolve_res.json()["data"]["status"] == "RESOLVED"
+                print(f"[Self-Test] POST /gaps/{gap_id}/resolve verified.")
+
+                # 11. POST /gaps/{id}/ignore
+                create_gap2 = await ac.post("/api/v1/evolution/gaps", json={"query": "午餐吃什么"})
+                gap2_id = create_gap2.json()["data"]["id"]
+                ignore_res = await ac.post(f"/api/v1/evolution/gaps/{gap2_id}/ignore")
+                assert ignore_res.status_code == 200
+                assert ignore_res.json()["data"]["status"] == "IGNORED"
+                print(f"[Self-Test] POST /gaps/{gap2_id}/ignore verified.")
 
         await test_engine.dispose()
         print("=== [Self-Test] All Evolution Router tests PASSED successfully! ===")

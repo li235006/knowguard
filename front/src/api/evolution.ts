@@ -529,15 +529,28 @@ export const deleteFaqApi = async (faqId: number): Promise<ApiResponse<boolean>>
   return request.delete(`/api/v1/evolution/faqs/${faqId}`)
 }
 
-// 11. 获取知识盲区缺口池 (GET /api/v1/evolution/knowledge-gaps)
+// 11. 获取知识盲区缺口池 (GET /api/v1/evolution/gaps)
 export const getKnowledgeGapsApi = async (
-  params: PaginationParams & { status?: string; search?: string; keyword?: string }
+  params: PaginationParams & {
+    status?: string
+    search?: string
+    keyword?: string
+    sort_by?: string
+    order?: string
+  }
 ): Promise<ApiResponse<PaginatedData<KnowledgeGap>>> => {
   if (isMockEnabled()) {
     await new Promise((resolve) => setTimeout(resolve, 120))
     let filtered = [...liveMockKnowledgeGaps]
     if (params.status && params.status !== 'ALL') {
-      filtered = filtered.filter((g) => g.status === params.status)
+      const targetStatus = params.status.toUpperCase()
+      if (targetStatus === 'RESOLVED') {
+        filtered = filtered.filter((g) => g.status === 'RESOLVED' || g.status === 'CONVERTED')
+      } else if (targetStatus === 'IGNORED') {
+        filtered = filtered.filter((g) => g.status === 'IGNORED' || g.status === 'DISMISSED')
+      } else {
+        filtered = filtered.filter((g) => g.status === targetStatus)
+      }
     }
     const kw = params.search || params.keyword
     if (kw && kw.trim()) {
@@ -549,6 +562,26 @@ export const getKnowledgeGapsApi = async (
           (g.domain && g.domain.toLowerCase().includes(q))
       )
     }
+
+    // 排序逻辑
+    const sortBy = params.sort_by || 'hit_count'
+    const isAsc = params.order?.toLowerCase() === 'asc'
+    filtered.sort((a, b) => {
+      let valA: number = 0
+      let valB: number = 0
+      if (sortBy === 'hit_count') {
+        valA = a.hit_count
+        valB = b.hit_count
+      } else if (sortBy === 'created_at') {
+        valA = new Date(a.created_at || a.first_seen_at || 0).getTime()
+        valB = new Date(b.created_at || b.first_seen_at || 0).getTime()
+      } else {
+        valA = a.id
+        valB = b.id
+      }
+      return isAsc ? valA - valB : valB - valA
+    })
+
     const page = params.page || 1
     const pageSize = params.page_size || 10
     const start = (page - 1) * pageSize
@@ -571,13 +604,15 @@ export const getKnowledgeGapsApi = async (
     page_size: params.page_size || 10
   }
   if (params.status && params.status !== 'ALL') queryParams.status = params.status
+  if (params.sort_by) queryParams.sort_by = params.sort_by
+  if (params.order) queryParams.order = params.order
   const kw = params.search || params.keyword
   if (kw && kw.trim()) queryParams.keyword = kw.trim()
 
-  return request.get('/api/v1/evolution/knowledge-gaps', { params: queryParams })
+  return request.get('/api/v1/evolution/gaps', { params: queryParams })
 }
 
-// 12. 知识缺口一键转建为补充工单 (POST /api/v1/evolution/knowledge-gaps/{id}/convert)
+// 12. 知识缺口一键转建为补充工单 (POST /api/v1/evolution/gaps/{id}/convert)
 export const convertKnowledgeGapApi = async (
   gapId: number,
   payload: KnowledgeGapConvertPayload
@@ -597,7 +632,47 @@ export const convertKnowledgeGapApi = async (
     }
   }
 
-  return request.post(`/api/v1/evolution/knowledge-gaps/${gapId}/convert`, payload)
+  return request.post(`/api/v1/evolution/gaps/${gapId}/convert`, payload)
+}
+
+// 13. 标记知识缺口为已解决 (POST /api/v1/evolution/gaps/{id}/resolve)
+export const resolveKnowledgeGapApi = async (gapId: number): Promise<ApiResponse<KnowledgeGap>> => {
+  if (isMockEnabled()) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const gap = liveMockKnowledgeGaps.find((g) => g.id === gapId)
+    if (gap) {
+      gap.status = 'RESOLVED'
+    }
+    return {
+      code: 200,
+      message: '知识缺口已标记解决',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data: (gap || { id: gapId, status: 'RESOLVED', query_text: '' }) as any,
+      trace_id: generateTraceId()
+    }
+  }
+
+  return request.post(`/api/v1/evolution/gaps/${gapId}/resolve`)
+}
+
+// 14. 忽略/驳回知识缺口 (POST /api/v1/evolution/gaps/{id}/ignore)
+export const ignoreKnowledgeGapApi = async (gapId: number): Promise<ApiResponse<KnowledgeGap>> => {
+  if (isMockEnabled()) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const gap = liveMockKnowledgeGaps.find((g) => g.id === gapId)
+    if (gap) {
+      gap.status = 'IGNORED'
+    }
+    return {
+      code: 200,
+      message: '知识缺口已忽略',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data: (gap || { id: gapId, status: 'IGNORED', query_text: '' }) as any,
+      trace_id: generateTraceId()
+    }
+  }
+
+  return request.post(`/api/v1/evolution/gaps/${gapId}/ignore`)
 }
 
 // 13. 获取知识自进化看板核心度量统计 (GET /api/v1/evolution/metrics)
