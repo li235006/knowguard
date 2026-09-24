@@ -115,16 +115,16 @@ async def test_auth_login_disabled_account_blocked(client: AsyncClient, db_sessi
     """测试停用账号登录被拦截并返回 401"""
     service = IAMService(db_session)
     await service.create_user(UserCreate(
-        employee_id="10088",
-        username="wangwu",
-        real_name="王五",
+        employee_id="99988",
+        username="disabled_user",
+        real_name="停用测试用户",
         password="ValidPassword123",
         is_active=False,
     ))
 
     response = await client.post(
         "/api/v1/auth/login",
-        json={"username": "10088", "password": "ValidPassword123"},
+        json={"username": "99988", "password": "ValidPassword123"},
     )
     assert response.status_code == 401
     res_json = response.json()
@@ -210,3 +210,58 @@ async def test_auth_refresh_token_flow(client: AsyncClient, db_session: AsyncSes
         headers={"Authorization": f"Bearer {ref_data['access_token']}"},
     )
     assert me_res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_seed_accounts_and_claims(client: AsyncClient, db_session: AsyncSession):
+    """测试 Seed 预置三账号 (张三/李四/王五) 凭据验证与 JWT 7200秒载荷及 /me 返回结构"""
+    service = IAMService(db_session)
+    seed_res = await service.seed_data()
+    assert len(seed_res["accounts"]) == 3
+
+    # 1. 验证张三 (10086/研发部/普通员工/123456)
+    zs_res = await client.post("/api/v1/auth/login", json={"username": "10086", "password": "123456"})
+    assert zs_res.status_code == 200
+    zs_data = zs_res.json()["data"]
+    assert zs_data["expires_in"] == 7200
+    zs_claims = decode_token(zs_data["access_token"])
+    assert zs_claims["user_id"] is not None
+    assert zs_claims["username"] == "zhangsan"
+    assert zs_claims["real_name"] == "张三"
+    assert zs_claims["employee_id"] == "10086"
+    assert zs_claims["dept_name"] == "研发部"
+    assert zs_claims["role_code"] == "ROLE_COMMON_USER"
+
+    zs_me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {zs_data['access_token']}"})
+    assert zs_me.status_code == 200
+    zs_profile = zs_me.json()["data"]
+    assert zs_profile["real_name"] == "张三"
+    assert zs_profile["dept_name"] == "研发部"
+    assert zs_profile["role_code"] == "ROLE_COMMON_USER"
+
+    # 2. 验证李四 (10087/财务部/部门经理/123456)
+    ls_res = await client.post("/api/v1/auth/login", json={"username": "10087", "password": "123456"})
+    assert ls_res.status_code == 200
+    ls_data = ls_res.json()["data"]
+    ls_claims = decode_token(ls_data["access_token"])
+    assert ls_claims["real_name"] == "李四"
+    assert ls_claims["dept_name"] == "财务部"
+    assert ls_claims["role_code"] == "ROLE_DEPT_MANAGER"
+
+    ls_me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {ls_data['access_token']}"})
+    assert ls_me.status_code == 200
+    assert ls_me.json()["data"]["role_code"] == "ROLE_DEPT_MANAGER"
+
+    # 3. 验证王五 (10088/管理层/系统管理员/123456)
+    ww_res = await client.post("/api/v1/auth/login", json={"username": "10088", "password": "123456"})
+    assert ww_res.status_code == 200
+    ww_data = ww_res.json()["data"]
+    ww_claims = decode_token(ww_data["access_token"])
+    assert ww_claims["real_name"] == "王五"
+    assert ww_claims["dept_name"] == "管理层"
+    assert ww_claims["role_code"] == "ROLE_SUPER_ADMIN"
+
+    ww_me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {ww_data['access_token']}"})
+    assert ww_me.status_code == 200
+    assert ww_me.json()["data"]["is_superuser"] is True
+

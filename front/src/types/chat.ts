@@ -3,6 +3,14 @@
  * 镜像对齐: backend/app/schemas/chat.py
  */
 
+export interface ConversationItem {
+  id: string
+  title: string
+  created_at: string
+  updated_at?: string
+  message_count?: number
+}
+
 export interface ChatRequest {
   conversation_id?: string
   query: string
@@ -24,9 +32,32 @@ export interface ChatMessage {
   citations?: CitationItem[]
   is_silent_fallback?: boolean
   created_at: string
+  status?: 'streaming' | 'done' | 'error'
 }
+
+export interface TextDeltaEventData {
+  delta: string
+}
+
+export interface WarningEventData {
+  type: string
+  message: string
+}
+
+export interface DoneEventData {
+  conversation_id: string
+  trace_id: string
+  total_tokens?: number
+}
+
+export type ChatEventData =
+  | TextDeltaEventData
+  | CitationItem
+  | WarningEventData
+  | DoneEventData
+  | Record<string, unknown>
 
 export interface ChatEvent {
   event: 'text_delta' | 'citation' | 'warning' | 'done'
-  data: any
+  data: ChatEventData
 }

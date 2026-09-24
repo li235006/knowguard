@@ -82,6 +82,12 @@ BUILTIN_ROLES = [
         "is_system": True,
     },
     {
+        "code": "ROLE_DEPT_MANAGER",
+        "name": "部门经理",
+        "description": "负责部门日常运营管理与审批",
+        "is_system": True,
+    },
+    {
         "code": "ROLE_AUDITOR",
         "name": "合规审计员",
         "description": "负责安全审计日志调阅、合规拦截监控与风险态势感知",
@@ -277,6 +283,162 @@ class IAMService:
                 result.extend(self._flatten_permission_tree(node["children"]))
         return result
 
+    async def seed_data(self) -> Dict[str, Any]:
+        """执行 Seed 逻辑，预置基础部门、角色与三账号：
+        - 张三 (10086/研发部/普通员工/123456)
+        - 李四 (10087/财务部/部门经理/123456)
+        - 王五 (10088/管理层/系统管理员/123456)
+        """
+        # 1. 确保系统内置角色全量初始化
+        await self.init_builtin_roles_and_permissions()
+
+        # 2. 预置基础部门 (管理层 ➔ 研发部、财务部)
+        # 管理层 (根部门)
+        mgmt_stmt = select(Department).where(Department.code == "DEPT_MGMT", Department.is_deleted == False)
+        mgmt_res = await self.db.execute(mgmt_stmt)
+        dept_mgmt = mgmt_res.scalars().first()
+        if not dept_mgmt:
+            dept_mgmt = Department(
+                name="管理层",
+                code="DEPT_MGMT",
+                parent_id=None,
+                materialized_path="/",
+                level=1,
+                leader_name="王五",
+                status=True,
+            )
+            self.db.add(dept_mgmt)
+            await self.db.flush()
+            dept_mgmt.materialized_path = f"/{dept_mgmt.id}/"
+            await self.db.flush()
+
+        # 研发部 (二级)
+        rd_stmt = select(Department).where(Department.code == "DEPT_RD", Department.is_deleted == False)
+        rd_res = await self.db.execute(rd_stmt)
+        dept_rd = rd_res.scalars().first()
+        if not dept_rd:
+            dept_rd = Department(
+                name="研发部",
+                code="DEPT_RD",
+                parent_id=dept_mgmt.id,
+                materialized_path=f"{dept_mgmt.materialized_path}",
+                level=2,
+                leader_name="技术负责人",
+                status=True,
+            )
+            self.db.add(dept_rd)
+            await self.db.flush()
+            dept_rd.materialized_path = f"{dept_mgmt.materialized_path}{dept_rd.id}/"
+            await self.db.flush()
+
+        # 财务部 (二级)
+        fin_stmt = select(Department).where(Department.code == "DEPT_FINANCE", Department.is_deleted == False)
+        fin_res = await self.db.execute(fin_stmt)
+        dept_finance = fin_res.scalars().first()
+        if not dept_finance:
+            dept_finance = Department(
+                name="财务部",
+                code="DEPT_FINANCE",
+                parent_id=dept_mgmt.id,
+                materialized_path=f"{dept_mgmt.materialized_path}",
+                level=2,
+                leader_name="李四",
+                status=True,
+            )
+            self.db.add(dept_finance)
+            await self.db.flush()
+            dept_finance.materialized_path = f"{dept_mgmt.materialized_path}{dept_finance.id}/"
+            await self.db.flush()
+
+        # 3. 预置三账号与角色绑定
+        role_stmt = select(Role).where(Role.is_deleted == False)
+        role_res = await self.db.execute(role_stmt)
+        role_map = {r.code: r for r in role_res.scalars().all()}
+
+        seed_users = [
+            {
+                "employee_id": "10086",
+                "username": "zhangsan",
+                "real_name": "张三",
+                "password": "123456",
+                "dept_id": dept_rd.id,
+                "role_code": "ROLE_COMMON_USER",
+                "is_superuser": False,
+            },
+            {
+                "employee_id": "10087",
+                "username": "lisi",
+                "real_name": "李四",
+                "password": "123456",
+                "dept_id": dept_finance.id,
+                "role_code": "ROLE_DEPT_MANAGER",
+                "is_superuser": False,
+            },
+            {
+                "employee_id": "10088",
+                "username": "wangwu",
+                "real_name": "王五",
+                "password": "123456",
+                "dept_id": dept_mgmt.id,
+                "role_code": "ROLE_SUPER_ADMIN",
+                "is_superuser": True,
+            },
+        ]
+
+        seeded_accounts = []
+        for item in seed_users:
+            u_stmt = select(User).where(
+                (User.employee_id == item["employee_id"]) | (User.username == item["username"]),
+                User.is_deleted == False,
+            )
+            u_res = await self.db.execute(u_stmt)
+            user = u_res.scalars().first()
+
+            hashed_pwd = get_password_hash(item["password"])
+            target_role = role_map.get(item["role_code"])
+
+            if not user:
+                user = User(
+                    employee_id=item["employee_id"],
+                    username=item["username"],
+                    real_name=item["real_name"],
+                    hashed_password=hashed_pwd,
+                    department_id=item["dept_id"],
+                    is_active=True,
+                    is_superuser=item["is_superuser"],
+                )
+                self.db.add(user)
+                await self.db.flush()
+                if target_role:
+                    self.db.add(UserRole(user_id=user.id, role_id=target_role.id))
+                    await self.db.flush()
+            else:
+                user.hashed_password = hashed_pwd
+                user.real_name = item["real_name"]
+                user.department_id = item["dept_id"]
+                user.is_active = True
+                user.is_superuser = item["is_superuser"]
+                await self.db.flush()
+                if target_role:
+                    await self.db.execute(delete(UserRole).where(UserRole.user_id == user.id))
+                    self.db.add(UserRole(user_id=user.id, role_id=target_role.id))
+                    await self.db.flush()
+
+            seeded_accounts.append({
+                "employee_id": user.employee_id,
+                "username": user.username,
+                "real_name": user.real_name,
+                "dept_id": user.department_id,
+                "role_code": item["role_code"],
+            })
+
+        await self.db.commit()
+        return {
+            "departments": ["管理层", "研发部", "财务部"],
+            "roles": list(role_map.keys()),
+            "accounts": seeded_accounts,
+        }
+
     # ==================== 身份认证与 Token ====================
 
     async def authenticate_user(self, username: str, password: str) -> User:
@@ -309,16 +471,22 @@ class IAMService:
         permissions = await self.get_user_permissions(user.id)
         role_ids = [r.id for r in user.roles]
         role_codes = [r.code for r in user.roles]
+        role_code = role_codes[0] if role_codes else "ROLE_COMMON_USER"
+        dept_name = user.department.name if user.department else None
 
         claims = {
             "sub": str(user.id),
+            "user_id": user.id,
             "username": user.username,
             "real_name": user.real_name,
             "employee_id": user.employee_id,
             "dept_id": user.department_id,
+            "dept_name": dept_name,
+            "role_code": role_code,
             "role_ids": role_ids,
             "role_codes": role_codes,
             "permissions": permissions,
+            "is_superuser": bool(user.is_superuser),
         }
 
         access_token = create_access_token(claims)
@@ -337,7 +505,8 @@ class IAMService:
             username=user.username,
             real_name=user.real_name,
             dept_id=user.department_id,
-            dept_name=user.department.name if user.department else None,
+            dept_name=dept_name,
+            role_code=role_code,
             role_ids=role_ids,
             role_codes=role_codes,
             permissions=permissions,
@@ -359,15 +528,24 @@ class IAMService:
             raise AuthenticationError(message="用户不存在或已被停用", code=40101)
 
         permissions = await self.get_user_permissions(user.id)
+        role_ids = [r.id for r in user.roles]
+        role_codes = [r.code for r in user.roles]
+        role_code = role_codes[0] if role_codes else "ROLE_COMMON_USER"
+        dept_name = user.department.name if user.department else None
+
         claims = {
             "sub": str(user.id),
+            "user_id": user.id,
             "username": user.username,
             "real_name": user.real_name,
             "employee_id": user.employee_id,
             "dept_id": user.department_id,
-            "role_ids": [r.id for r in user.roles],
-            "role_codes": [r.code for r in user.roles],
+            "dept_name": dept_name,
+            "role_code": role_code,
+            "role_ids": role_ids,
+            "role_codes": role_codes,
             "permissions": permissions,
+            "is_superuser": bool(user.is_superuser),
         }
         new_access_token = create_access_token(claims)
         new_refresh_token = create_refresh_token({"sub": str(user.id), "token_type": "refresh"})
@@ -1048,13 +1226,37 @@ if __name__ == "__main__":
             assert refreshed_tokens.access_token is not None
             print("[Self-Test] Refresh token seamless renewal PASSED.")
 
-            # 验证启停用控制
-            await service.set_user_status(user_resp.id, False)
-            try:
-                await service.login(login_req)
-                raise AssertionError("Disabled user should not be able to log in!")
-            except AuthenticationError as e:
-                print(f"[Self-Test] Correctly blocked disabled user login: {e.message}")
+            # 5. 验证 Seed 逻辑与预置 3 大账号
+            seed_res = await service.seed_data()
+            print(f"[Self-Test] Seed data executed: {seed_res['departments']}, accounts: {len(seed_res['accounts'])}")
+            
+            # 验证张三登录 (10086 / 研发部 / 普通员工 / 123456)
+            zs_tokens, zs_ctx = await service.login(LoginRequest(username="10086", password="123456"))
+            assert zs_ctx.username == "zhangsan"
+            assert zs_ctx.real_name == "张三"
+            assert zs_ctx.dept_name == "研发部"
+            assert zs_ctx.role_code == "ROLE_COMMON_USER"
+            assert zs_tokens.expires_in == 7200
+            zs_claims = decode_token(zs_tokens.access_token)
+            assert zs_claims["user_id"] == zs_ctx.user_id
+            assert zs_claims["role_code"] == "ROLE_COMMON_USER"
+            assert zs_claims["dept_name"] == "研发部"
+
+            # 验证李四登录 (10087 / 财务部 / 部门经理 / 123456)
+            ls_tokens, ls_ctx = await service.login(LoginRequest(username="10087", password="123456"))
+            assert ls_ctx.username == "lisi"
+            assert ls_ctx.real_name == "李四"
+            assert ls_ctx.dept_name == "财务部"
+            assert ls_ctx.role_code == "ROLE_DEPT_MANAGER"
+
+            # 验证王五登录 (10088 / 管理层 / 系统管理员 / 123456)
+            ww_tokens, ww_ctx = await service.login(LoginRequest(username="10088", password="123456"))
+            assert ww_ctx.username == "wangwu"
+            assert ww_ctx.real_name == "王五"
+            assert ww_ctx.dept_name == "管理层"
+            assert ww_ctx.role_code == "ROLE_SUPER_ADMIN"
+            assert ww_ctx.is_superuser is True
+            print("[Self-Test] All 3 seed accounts (Zhang San, Li Si, Wang Wu) logged in successfully.")
 
         await test_engine.dispose()
         print("=== [Self-Test] All IAMService tests PASSED successfully! ===")

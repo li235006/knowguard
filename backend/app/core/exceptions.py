@@ -83,6 +83,10 @@ class EntityNotFoundError(KnowGuardException):
         )
 
 
+NotFoundError = EntityNotFoundError
+
+
+
 class BusinessLogicError(KnowGuardException):
     """业务逻辑或参数校验阻断异常 (40001)"""
 

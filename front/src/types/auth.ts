@@ -15,10 +15,38 @@ export interface TokenResponse {
   expires_in: number
 }
 
+export interface RefreshTokenRequest {
+  refresh_token: string
+}
+
+export interface TokenPayload {
+  sub: string
+  user_id: number
+  username: string
+  real_name: string
+  employee_id: string
+  dept_id?: number | null
+  dept_name?: string | null
+  role_code?: string | null
+  role_codes: string[]
+  role_ids: number[]
+  permissions: string[]
+  token_type: string
+  exp: number
+  iat?: number | null
+}
+
 export interface UserContext {
   user_id: number
   username: string
-  dept_id: number
+  real_name: string
+  employee_id: string
+  dept_id?: number | null
+  dept_name?: string | null
+  role_code?: string | null
+  role_codes: string[]
   role_ids: number[]
   permissions: string[]
+  avatar?: string | null
+  is_superuser?: boolean
 }

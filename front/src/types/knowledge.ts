@@ -7,10 +7,18 @@ export interface KnowledgeUnit {
   id: number
   title: string
   file_type: string
+  file_size?: number
   category: string
-  status: 'PENDING' | 'PARSING' | 'CHUNKING' | 'INDEXED' | 'FAILED'
+  status: 'PENDING' | 'PARSING' | 'CHUNKING' | 'INDEXED' | 'DISABLED' | 'FAILED' | string
   chunk_count: number
+  permission_summary?: string
+  error_message?: string | null
   created_at: string
+  updated_at?: string | null
+}
+
+export interface KnowledgeUnitStatusUpdate {
+  status: 'AVAILABLE' | 'DISABLED' | 'INDEXED' | string
 }
 
 export interface ChunkItem {
@@ -18,8 +26,10 @@ export interface ChunkItem {
   unit_id: number
   chunk_index: number
   content: string
-  metadata: Record<string, any>
+  metadata: Record<string, unknown>
   has_vector: boolean
+  char_length?: number
+  status?: string
 }
 
 export interface PermissionPolicyConfig {

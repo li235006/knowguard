@@ -80,12 +80,13 @@ async def get_current_user(
         # 已通过中间件解析
         payload = request.state.user
         return UserContext(
-            user_id=int(payload.get("sub")),
+            user_id=int(payload.get("user_id", payload.get("sub"))),
             employee_id=payload.get("employee_id", ""),
             username=payload.get("username", ""),
             real_name=payload.get("real_name", payload.get("username", "")),
             dept_id=payload.get("dept_id"),
             dept_name=payload.get("dept_name"),
+            role_code=payload.get("role_code") or (payload.get("role_codes", [None])[0] if payload.get("role_codes") else None),
             role_ids=payload.get("role_ids", []),
             role_codes=payload.get("role_codes", []),
             permissions=payload.get("permissions", []),
@@ -101,12 +102,13 @@ async def get_current_user(
         raise AuthenticationError(message="凭据类型错误，请使用 Access Token", code=40101)
 
     return UserContext(
-        user_id=int(payload.get("sub")),
+        user_id=int(payload.get("user_id", payload.get("sub"))),
         employee_id=payload.get("employee_id", ""),
         username=payload.get("username", ""),
         real_name=payload.get("real_name", payload.get("username", "")),
         dept_id=payload.get("dept_id"),
         dept_name=payload.get("dept_name"),
+        role_code=payload.get("role_code") or (payload.get("role_codes", [None])[0] if payload.get("role_codes") else None),
         role_ids=payload.get("role_ids", []),
         role_codes=payload.get("role_codes", []),
         permissions=payload.get("permissions", []),

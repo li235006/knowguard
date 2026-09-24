@@ -24,6 +24,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
 from app.services.iam_service import IAMService
@@ -36,7 +37,7 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 @pytest_asyncio.fixture(scope="session")
 async def test_engine():
     """会话级测试数据库引擎"""
-    engine = create_async_engine(TEST_DB_URL, echo=False)
+    engine = create_async_engine(TEST_DB_URL, poolclass=StaticPool, echo=False)
     yield engine
     await engine.dispose()
 

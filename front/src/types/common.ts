@@ -3,7 +3,7 @@
  * 镜像对齐: backend/app/schemas/common.py
  */
 
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   code: number
   message: string
   data: T
