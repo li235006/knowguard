@@ -7,9 +7,9 @@
     <!-- Drawer Header -->
     <div class="h-12 border-b border-[#E5E7EB] px-4 flex items-center justify-between shrink-0 bg-white">
       <div class="flex items-center gap-2 overflow-hidden">
-        <span class="font-bold text-xs text-[#0F172A] truncate">权限配置: {{ role.role_name }}</span>
+        <span class="font-bold text-xs text-[#0F172A] truncate">权限配置: {{ role.role_name || role.name }}</span>
         <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#0071E3] border border-[#BFDBFE] shrink-0">
-          {{ role.role_code }}
+          {{ role.role_code || role.code }}
         </span>
       </div>
       <button
@@ -76,7 +76,7 @@
             />
             <span class="flex items-center gap-1.5">
               <Folder :size="13" class="text-[#0071E3]" />
-              {{ menuNode.title }}
+              {{ menuNode.title || menuNode.label }}
             </span>
           </label>
 
@@ -95,7 +95,7 @@
               />
               <span class="flex items-center gap-1.5">
                 <FileCode :size="12" class="text-amber-500" />
-                {{ routeNode.title }}
+                {{ routeNode.title || routeNode.label }}
               </span>
             </label>
 
@@ -115,8 +115,8 @@
                   class="w-3 h-3 text-[#0071E3] rounded border-gray-300 focus:ring-[#0071E3]"
                   @change="toggleNode(btnNode.code)"
                 />
-                <span :class="btnNode.title.includes('高危') ? 'text-red-500 font-medium' : ''">
-                  {{ btnNode.title }}
+                <span :class="(btnNode.title || btnNode.label || '').includes('高危') ? 'text-red-500 font-medium' : ''">
+                  {{ btnNode.title || btnNode.label }}
                 </span>
               </label>
             </div>
@@ -177,15 +177,15 @@ const selectedCodes = ref<Set<string>>(new Set())
 const isSaving = ref(false)
 
 watch(
-  () => props.role,
-  (newRole) => {
+  [() => props.role, () => props.permissionTree],
+  ([newRole, tree]) => {
     if (newRole) {
-      if (newRole.permissions.includes('*')) {
-        // 全选所有权限
-        const all = getAllCodes(props.permissionTree)
+      const perms = newRole.permissions || newRole.permission_codes || []
+      if (perms.includes('*') && tree && tree.length > 0) {
+        const all = getAllCodes(tree)
         selectedCodes.value = new Set(all)
       } else {
-        selectedCodes.value = new Set(newRole.permissions)
+        selectedCodes.value = new Set(perms)
       }
     }
   },

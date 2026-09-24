@@ -33,6 +33,7 @@ from app.schemas.user import (
     RoleCreate,
     RolePermissionUpdate,
     RoleResponse,
+    RoleUpdate,
 )
 from app.services.iam_service import IAMService
 
@@ -45,7 +46,7 @@ async def list_roles(
     db: AsyncSession = Depends(get_db),
     current_user: UserContext = Depends(get_current_user),
 ):
-    """获取所有角色列表及其绑定的权限代码"""
+    """获取所有角色列表及其绑定的权限代码 (包含 5 大内置业务角色)"""
     trace_id = getattr(request.state, "trace_id", None)
     service = IAMService(db)
     roles = await service.list_roles()
@@ -76,6 +77,26 @@ async def create_role(
     )
 
 
+@router.put("/{role_id}", response_model=StandardResponse[RoleResponse])
+async def update_role(
+    role_id: int,
+    payload: RoleUpdate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user),
+):
+    """修改角色基本信息或权限"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = IAMService(db)
+    role_resp = await service.update_role(role_id, payload)
+    return StandardResponse(
+        code=200,
+        message="角色修改成功",
+        data=role_resp,
+        trace_id=trace_id,
+    )
+
+
 @router.put("/{role_id}/permissions", response_model=StandardResponse[RoleResponse])
 async def update_role_permissions(
     role_id: int,
@@ -84,10 +105,10 @@ async def update_role_permissions(
     db: AsyncSession = Depends(get_db),
     current_user: UserContext = Depends(get_current_user),
 ):
-    """更新角色三级 RBAC 细粒度操作权限"""
+    """更新角色三级 RBAC 细粒度操作权限 (支持 permission_codes 与 permissions 别名)"""
     trace_id = getattr(request.state, "trace_id", None)
     service = IAMService(db)
-    role_resp = await service.update_role_permissions(role_id, payload.permission_codes)
+    role_resp = await service.update_role_permissions(role_id, payload.get_codes())
     return StandardResponse(
         code=200,
         message="角色权限配置成功",
@@ -112,6 +133,7 @@ async def get_permission_tree(
         data=tree,
         trace_id=trace_id,
     )
+
 
 
 if __name__ == "__main__":
@@ -157,12 +179,17 @@ if __name__ == "__main__":
 
         transport = ASGITransport(app=test_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # 1. 查询角色列表
+            # 1. 查询角色列表 (校验 5 大内置业务角色)
             list_res = await client.get("/api/v1/roles", headers={"X-Trace-Id": "trace-test-role-001"})
             assert list_res.status_code == 200
             roles_data = list_res.json()["data"]
-            assert len(roles_data) >= 5
-            print(f"[Self-Test] GET /roles returned {len(roles_data)} roles.")
+            codes = [r["code"] for r in roles_data]
+            assert "ROLE_SUPER_ADMIN" in codes
+            assert "ROLE_KNOWLEDGE_ADMIN" in codes
+            assert "ROLE_DEPT_MANAGER" in codes
+            assert "ROLE_EMPLOYEE" in codes
+            assert "ROLE_AUDITOR" in codes
+            print(f"[Self-Test] GET /roles verified: 5 builtin roles verified in {len(roles_data)} roles.")
 
             # 2. 查询权限树
             tree_res = await client.get("/api/v1/roles/permissions/tree")
@@ -170,7 +197,7 @@ if __name__ == "__main__":
             assert len(tree_res.json()["data"]) > 0
             print("[Self-Test] GET /roles/permissions/tree verified.")
 
-            # 3. 创建自定义角色并更新权限
+            # 3. 创建自定义角色
             create_res = await client.post(
                 "/api/v1/roles",
                 json={
@@ -184,16 +211,26 @@ if __name__ == "__main__":
             new_role_id = create_res.json()["data"]["id"]
             print(f"[Self-Test] Created role ID: {new_role_id}")
 
-            # 4. 更新权限
+            # 4. 更新权限 (支持 permissions 别名)
             perm_res = await client.put(
                 f"/api/v1/roles/{new_role_id}/permissions",
-                json={"permission_codes": ["knowledge:view", "knowledge:import"]}
+                json={"permissions": ["knowledge:view", "knowledge:import"]}
             )
             assert perm_res.status_code == 200
             assert len(perm_res.json()["data"]["permission_codes"]) == 2
             print("[Self-Test] PUT /roles/{id}/permissions verified.")
 
+            # 5. 修改角色基本信息 (PUT /roles/{id})
+            update_res = await client.put(
+                f"/api/v1/roles/{new_role_id}",
+                json={"name": "资深财务专家", "description": "负责集团财务审计核算"}
+            )
+            assert update_res.status_code == 200
+            assert update_res.json()["data"]["name"] == "资深财务专家"
+            print("[Self-Test] PUT /roles/{id} update verified.")
+
         await test_engine.dispose()
         print("=== [Self-Test] All Roles Router tests PASSED successfully! ===")
 
     asyncio.run(_test_roles_router())
+

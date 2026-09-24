@@ -37,6 +37,8 @@
         :users="systemStore.users"
         :total="systemStore.totalUsers"
         :selected-dept-id="systemStore.selectedDeptId"
+        :departments="systemStore.departmentTree"
+        :roles="systemStore.roles"
         @toggle-status="handleToggleStatus"
         @search="handleSearchUsers"
         @page-change="handlePageChange"
@@ -61,8 +63,11 @@ import UserTable from '@/components/System/UserTable.vue'
 const systemStore = useSystemStore()
 
 const refreshData = async () => {
-  await systemStore.fetchDepartmentTree()
-  await systemStore.fetchUsers()
+  await Promise.all([
+    systemStore.fetchDepartmentTree(),
+    systemStore.fetchRoles(),
+    systemStore.fetchUsers()
+  ])
 }
 
 const handleSelectDept = (deptId: number | null) => {

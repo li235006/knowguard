@@ -5,11 +5,23 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { DepartmentNode, UserItem, RoleItem, PermissionNode } from '@/types/system'
+import type {
+  DepartmentNode,
+  UserItem,
+  RoleItem,
+  PermissionNode,
+  DepartmentCreate,
+  UserCreate,
+  RoleCreate
+} from '@/types/system'
 import {
   getDepartmentTreeApi,
+  createDepartmentApi,
   getUsersListApi,
+  createUserApi,
+  resetUserPasswordApi,
   getRolesListApi,
+  createRoleApi,
   getPermissionTreeApi,
   toggleUserStatusApi,
   updateRolePermissionsApi
@@ -20,6 +32,9 @@ export const useSystemStore = defineStore('system', () => {
   const selectedDeptId = ref<number | null>(null)
   const users = ref<UserItem[]>([])
   const totalUsers = ref<number>(0)
+  const currentPage = ref<number>(1)
+  const currentPageSize = ref<number>(10)
+  const searchKeyword = ref<string>('')
   const roles = ref<RoleItem[]>([])
   const permissionTree = ref<PermissionNode[]>([])
   const isLoading = ref<boolean>(false)
@@ -36,14 +51,25 @@ export const useSystemStore = defineStore('system', () => {
     }
   }
 
+  const createDepartment = async (payload: DepartmentCreate): Promise<DepartmentNode> => {
+    const res = await createDepartmentApi(payload)
+    if (!res.data) throw new Error(res.message || '创建部门失败')
+    await fetchDepartmentTree()
+    return res.data
+  }
+
   const fetchUsers = async (params: { page?: number; page_size?: number; search?: string } = {}) => {
     isLoading.value = true
     try {
+      if (params.page !== undefined) currentPage.value = params.page
+      if (params.page_size !== undefined) currentPageSize.value = params.page_size
+      if (params.search !== undefined) searchKeyword.value = params.search
+
       const res = await getUsersListApi({
-        page: params.page || 1,
-        page_size: params.page_size || 10,
+        page: currentPage.value,
+        page_size: currentPageSize.value,
         dept_id: selectedDeptId.value,
-        search: params.search
+        search: searchKeyword.value
       })
       if (res.data) {
         users.value = res.data.items
@@ -52,6 +78,18 @@ export const useSystemStore = defineStore('system', () => {
     } finally {
       isLoading.value = false
     }
+  }
+
+  const createUser = async (payload: UserCreate): Promise<UserItem> => {
+    const res = await createUserApi(payload)
+    if (!res.data) throw new Error(res.message || '创建员工失败')
+    await fetchUsers()
+    return res.data
+  }
+
+  const resetUserPassword = async (userId: number, newPassword?: string): Promise<string> => {
+    const res = await resetUserPasswordApi(userId, newPassword)
+    return res.message || '密码重置成功'
   }
 
   const fetchRoles = async () => {
@@ -64,6 +102,13 @@ export const useSystemStore = defineStore('system', () => {
     } finally {
       isLoading.value = false
     }
+  }
+
+  const createRole = async (payload: RoleCreate): Promise<RoleItem> => {
+    const res = await createRoleApi(payload)
+    if (!res.data) throw new Error(res.message || '创建角色失败')
+    await fetchRoles()
+    return res.data
   }
 
   const fetchPermissionTree = async () => {
@@ -79,10 +124,10 @@ export const useSystemStore = defineStore('system', () => {
 
   const toggleUserStatus = async (userId: number, isActive: boolean) => {
     const res = await toggleUserStatusApi(userId, isActive)
-    if (res.data) {
+    if (res && res.code === 200) {
       const target = users.value.find((u) => u.id === userId)
       if (target) {
-        target.is_active = res.data.is_active
+        target.is_active = typeof res.data === 'boolean' ? res.data : isActive
       }
     }
   }
@@ -92,14 +137,16 @@ export const useSystemStore = defineStore('system', () => {
     if (res.data) {
       const target = roles.value.find((r) => r.id === roleId)
       if (target) {
-        target.permissions = [...res.data.permissions]
+        target.permissions = [...(res.data.permissions || permissions)]
+        target.permission_codes = [...(res.data.permission_codes || permissions)]
       }
     }
   }
 
   const selectDepartment = (deptId: number | null) => {
     selectedDeptId.value = deptId
-    fetchUsers({ page: 1, page_size: 10 })
+    currentPage.value = 1
+    fetchUsers({ page: 1, page_size: currentPageSize.value })
   }
 
   return {
@@ -107,16 +154,22 @@ export const useSystemStore = defineStore('system', () => {
     selectedDeptId,
     users,
     totalUsers,
+    currentPage,
+    currentPageSize,
+    searchKeyword,
     roles,
     permissionTree,
     isLoading,
     fetchDepartmentTree,
+    createDepartment,
     fetchUsers,
+    createUser,
+    resetUserPassword,
     fetchRoles,
+    createRole,
     fetchPermissionTree,
     toggleUserStatus,
     updateRolePermissions,
     selectDepartment
   }
 })
-

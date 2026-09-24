@@ -45,7 +45,7 @@ async def get_department_tree(
     db: AsyncSession = Depends(get_db),
     current_user: UserContext = Depends(get_current_user),
 ):
-    """获取部门组织架构树"""
+    """获取部门组织架构树 (支持 8 级递归与下属成员统计)"""
     trace_id = getattr(request.state, "trace_id", None)
     service = IAMService(db)
     tree = await service.get_department_tree()
@@ -53,6 +53,24 @@ async def get_department_tree(
         code=200,
         message="获取部门树成功",
         data=tree,
+        trace_id=trace_id,
+    )
+
+
+@router.get("", response_model=StandardResponse[List[DepartmentResponse]])
+async def list_departments(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user),
+):
+    """获取部门平铺列表 (支持各部门成员统计)"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = IAMService(db)
+    depts = await service.list_departments()
+    return StandardResponse(
+        code=200,
+        message="获取部门列表成功",
+        data=depts,
         trace_id=trace_id,
     )
 
@@ -193,15 +211,43 @@ if __name__ == "__main__":
             assert sub_res.json()["data"]["level"] == 2
             print(f"[Self-Test] Created sub department ID: {sub_id}")
 
-            # 3. 查询部门架构树
+            # 3. 添加员工测试部门人数统计 (user_count 递归累加)
+            from app.models.user import User
+            from app.core.security import get_password_hash
+            async with TestSessionLocal() as session:
+                u = User(
+                    employee_id="MKT001",
+                    username="mkt_user",
+                    real_name="市场专员",
+                    hashed_password=get_password_hash("Pass123"),
+                    department_id=sub_id,
+                    is_active=True,
+                )
+                session.add(u)
+                await session.commit()
+
+            # 4. 查询部门架构树并校验下属成员统计递归累加
             tree_res = await client.get("/api/v1/departments/tree")
             assert tree_res.status_code == 200
             tree_data = tree_res.json()["data"]
             assert len(tree_data) == 1
             assert len(tree_data[0]["children"]) == 1
-            print("[Self-Test] GET /departments/tree verified.")
+            assert tree_data[0]["user_count"] == 1, "根节点必须累加包含子部门员工人数"
+            assert tree_data[0]["children"][0]["user_count"] == 1
+            print(f"[Self-Test] GET /departments/tree verified: root user_count={tree_data[0]['user_count']}")
 
-            # 4. 删除叶子节点
+            # 5. 查询部门平铺列表
+            list_res = await client.get("/api/v1/departments")
+            assert list_res.status_code == 200
+            assert len(list_res.json()["data"]) == 2
+            print(f"[Self-Test] GET /departments flat list verified: {len(list_res.json()['data'])} departments returned")
+
+            # 6. 清理员工后安全删除叶子节点
+            async with TestSessionLocal() as session:
+                del_u = await session.get(User, u.id)
+                await session.delete(del_u)
+                await session.commit()
+
             del_sub_res = await client.delete(f"/api/v1/departments/{sub_id}")
             assert del_sub_res.status_code == 200
             print("[Self-Test] DELETE leaf department succeeded.")
@@ -210,3 +256,4 @@ if __name__ == "__main__":
         print("=== [Self-Test] All Departments Router tests PASSED successfully! ===")
 
     asyncio.run(_test_departments_router())
+

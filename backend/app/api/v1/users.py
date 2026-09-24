@@ -143,11 +143,32 @@ async def update_user_status(
     """启用或停用员工账号"""
     trace_id = getattr(request.state, "trace_id", None)
     service = IAMService(db)
-    res = await service.set_user_status(user_id, payload.is_active)
+    res = await service.set_user_status(user_id, payload.get_is_active())
     return StandardResponse(
         code=200,
         message="账号状态更新成功",
         data=res,
+        trace_id=trace_id,
+    )
+
+
+@router.post("/{user_id}/reset-password", response_model=StandardResponse[UserResponse])
+async def reset_user_password(
+    user_id: int,
+    payload: Optional[UserUpdate] = None,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserContext = Depends(get_current_user),
+):
+    """重置员工账号登录密码"""
+    pwd = (payload.password if payload and payload.password else None) or "KnowGuard@2026"
+    trace_id = getattr(request.state, "trace_id", None) if request else None
+    service = IAMService(db)
+    user_resp = await service.update_user(user_id, UserUpdate(password=pwd))
+    return StandardResponse(
+        code=200,
+        message=f"员工密码重置成功，新密码已生效: {pwd}",
+        data=user_resp,
         trace_id=trace_id,
     )
 

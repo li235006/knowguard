@@ -55,7 +55,7 @@ from app.schemas.user import (
     UserUpdate,
 )
 
-# 5 大系统内置角色定义
+# 5 大系统核心内置角色定义 (对齐 P1-5 规范)
 BUILTIN_ROLES = [
     {
         "code": "ROLE_SUPER_ADMIN",
@@ -70,27 +70,33 @@ BUILTIN_ROLES = [
         "is_system": True,
     },
     {
-        "code": "ROLE_COMMON_USER",
-        "name": "普通员工",
-        "description": "仅具备问答工作台、个人历史会话及放行知识查阅权限",
-        "is_system": True,
-    },
-    {
-        "code": "ROLE_HRBP",
-        "name": "HRBP",
-        "description": "具备人力行政知识管理、部门员工权限协同权限",
-        "is_system": True,
-    },
-    {
         "code": "ROLE_DEPT_MANAGER",
         "name": "部门经理",
         "description": "负责部门日常运营管理与审批",
         "is_system": True,
     },
     {
+        "code": "ROLE_EMPLOYEE",
+        "name": "普通员工",
+        "description": "仅具备问答工作台、个人历史会话及放行知识查阅权限",
+        "is_system": True,
+    },
+    {
         "code": "ROLE_AUDITOR",
         "name": "合规审计员",
         "description": "负责安全审计日志调阅、合规拦截监控与风险态势感知",
+        "is_system": True,
+    },
+    {
+        "code": "ROLE_COMMON_USER",
+        "name": "普通用户",
+        "description": "普通员工与访客默认角色 (兼容别名)",
+        "is_system": True,
+    },
+    {
+        "code": "ROLE_HRBP",
+        "name": "HRBP",
+        "description": "具备人力行政知识管理、部门员工权限协同权限",
         "is_system": True,
     },
 ]
@@ -260,7 +266,7 @@ class IAMService:
                             name=p["label"],
                             resource_path=p.get("resource_path"),
                         ))
-                elif role.code == "ROLE_COMMON_USER":
+                elif role.code in ["ROLE_COMMON_USER", "ROLE_EMPLOYEE"]:
                     # 普通员工仅赋予问答相关权限
                     common_perms = ["chat:menu", "chat:view", "chat:send", "chat:feedback"]
                     for p in self._flatten_permission_tree(STANDARD_PERMISSION_TREE):
@@ -596,9 +602,19 @@ class IAMService:
         res = await self.db.execute(stmt)
         all_depts = res.scalars().all()
 
+        # 聚合统计各部门活跃成员人数
+        user_cnt_stmt = (
+            select(User.department_id, func.count(User.id))
+            .where(User.is_deleted == False, User.department_id.isnot(None))
+            .group_by(User.department_id)
+        )
+        user_cnt_res = await self.db.execute(user_cnt_stmt)
+        user_counts = dict(user_cnt_res.all())
+
         # 映射缓存与递归组装
         dept_map: Dict[int, DepartmentTreeResponse] = {}
         for dept in all_depts:
+            cnt = user_counts.get(dept.id, 0)
             dept_map[dept.id] = DepartmentTreeResponse(
                 id=dept.id,
                 name=dept.name,
@@ -613,6 +629,10 @@ class IAMService:
                 status=dept.status,
                 created_at=dept.created_at,
                 updated_at=dept.updated_at,
+                member_count=cnt,
+                user_count=cnt,
+                direct_user_count=cnt,
+                direct_member_count=cnt,
                 children=[],
             )
 
@@ -624,7 +644,59 @@ class IAMService:
             else:
                 dept_map[dept.parent_id].children.append(node)
 
+        # 递归累计下级子部门人数到当前部门节点 (包含当前部门及下属成员总人数)
+        def _accumulate_user_counts(node: DepartmentTreeResponse) -> int:
+            total = user_counts.get(node.id, 0)
+            for child in node.children:
+                total += _accumulate_user_counts(child)
+            node.user_count = total
+            node.member_count = total
+            return total
+
+        for root in tree:
+            _accumulate_user_counts(root)
+
         return tree
+
+    async def list_departments(self) -> List[DepartmentResponse]:
+        """获取所有未删除部门列表 (平铺列表，附带人数统计)"""
+        stmt = (
+            select(Department)
+            .where(Department.is_deleted == False)
+            .order_by(Department.level.asc(), Department.sort_order.asc(), Department.id.asc())
+        )
+        res = await self.db.execute(stmt)
+        all_depts = res.scalars().all()
+
+        user_cnt_stmt = (
+            select(User.department_id, func.count(User.id))
+            .where(User.is_deleted == False, User.department_id.isnot(None))
+            .group_by(User.department_id)
+        )
+        user_cnt_res = await self.db.execute(user_cnt_stmt)
+        user_counts = dict(user_cnt_res.all())
+
+        results = []
+        for d in all_depts:
+            cnt = user_counts.get(d.id, 0)
+            results.append(DepartmentResponse(
+                id=d.id,
+                name=d.name,
+                code=d.code,
+                parent_id=d.parent_id,
+                materialized_path=d.materialized_path,
+                level=d.level,
+                sort_order=d.sort_order,
+                leader_name=d.leader_name,
+                phone=d.phone,
+                email=d.email,
+                status=d.status,
+                user_count=cnt,
+                member_count=cnt,
+                created_at=d.created_at,
+                updated_at=d.updated_at,
+            ))
+        return results
 
     async def create_department(self, data: DepartmentCreate) -> Department:
         """新增部门节点，严格执行 8 级层级约束与物化路径编码计算"""
@@ -879,10 +951,11 @@ class IAMService:
         if res.scalars().first():
             raise BusinessLogicError(message=f"工号 '{data.employee_id}' 或用户名 '{data.username}' 已存在", code=40001)
 
-        if data.department_id is not None:
-            dept = await self.db.get(Department, data.department_id)
+        target_dept_id = data.department_id if data.department_id is not None else getattr(data, "dept_id", None)
+        if target_dept_id is not None:
+            dept = await self.db.get(Department, target_dept_id)
             if not dept or dept.is_deleted:
-                raise EntityNotFoundError(message=f"部门 ID {data.department_id} 不存在", code=40401)
+                raise EntityNotFoundError(message=f"部门 ID {target_dept_id} 不存在", code=40401)
 
         hashed_password = get_password_hash(data.password)
 
@@ -894,7 +967,7 @@ class IAMService:
             email=data.email,
             phone=data.phone,
             avatar=data.avatar,
-            department_id=data.department_id,
+            department_id=target_dept_id,
             is_active=data.is_active,
             is_superuser=data.is_superuser,
         )
@@ -920,7 +993,9 @@ class IAMService:
             phone=user_full.phone,
             avatar=user_full.avatar,
             department_id=user_full.department_id,
+            dept_id=user_full.department_id,
             department_name=user_full.department.name if user_full.department else None,
+            dept_name=user_full.department.name if user_full.department else None,
             is_active=user_full.is_active,
             is_superuser=user_full.is_superuser,
             roles=[
@@ -932,15 +1007,18 @@ class IAMService:
                     status=r.status,
                     is_system=r.is_system,
                     permission_codes=[p.permission_code for p in r.permissions],
+                    permissions=[p.permission_code for p in r.permissions],
                 )
                 for r in user_full.roles
             ],
+            role_ids=[r.id for r in user_full.roles],
+            role_names=[r.name for r in user_full.roles],
             created_at=user_full.created_at,
             updated_at=user_full.updated_at,
         )
 
     async def update_user(self, user_id: int, data: UserUpdate) -> UserResponse:
-        """更新员工信息或重置密码"""
+        """更新员工信息、角色或密码"""
         user = await self.get_user_by_id(user_id)
 
         if data.real_name is not None:
@@ -951,12 +1029,16 @@ class IAMService:
             user.phone = data.phone
         if data.avatar is not None:
             user.avatar = data.avatar
-        if "department_id" in data.model_fields_set:
-            if data.department_id is not None:
-                dept = await self.db.get(Department, data.department_id)
+        if data.is_active is not None:
+            user.is_active = data.is_active
+
+        target_dept_id = data.department_id if data.department_id is not None else getattr(data, "dept_id", None)
+        if "department_id" in data.model_fields_set or "dept_id" in data.model_fields_set:
+            if target_dept_id is not None:
+                dept = await self.db.get(Department, target_dept_id)
                 if not dept or dept.is_deleted:
-                    raise EntityNotFoundError(message=f"部门 ID {data.department_id} 不存在", code=40401)
-                user.department_id = data.department_id
+                    raise EntityNotFoundError(message=f"部门 ID {target_dept_id} 不存在", code=40401)
+                user.department_id = target_dept_id
             else:
                 user.department_id = None
         if data.password:
@@ -973,6 +1055,7 @@ class IAMService:
         await self.db.refresh(user)
 
         user_full = await self.get_user_by_id(user.id)
+
         return UserResponse(
             id=user_full.id,
             employee_id=user_full.employee_id,
@@ -982,7 +1065,9 @@ class IAMService:
             phone=user_full.phone,
             avatar=user_full.avatar,
             department_id=user_full.department_id,
+            dept_id=user_full.department_id,
             department_name=user_full.department.name if user_full.department else None,
+            dept_name=user_full.department.name if user_full.department else None,
             is_active=user_full.is_active,
             is_superuser=user_full.is_superuser,
             roles=[
@@ -994,12 +1079,23 @@ class IAMService:
                     status=r.status,
                     is_system=r.is_system,
                     permission_codes=[p.permission_code for p in r.permissions],
+                    permissions=[p.permission_code for p in r.permissions],
                 )
                 for r in user_full.roles
             ],
+            role_ids=[r.id for r in user_full.roles],
+            role_names=[r.name for r in user_full.roles],
             created_at=user_full.created_at,
             updated_at=user_full.updated_at,
         )
+
+    async def reset_password(self, user_id: int, new_password: str = "Password123!") -> bool:
+        """重置员工账号登录密码"""
+        user = await self.get_user_by_id(user_id)
+        user.hashed_password = get_password_hash(new_password)
+        user.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        return True
 
     async def set_user_status(self, user_id: int, is_active: bool) -> bool:
         """启停用员工账号"""
@@ -1012,7 +1108,7 @@ class IAMService:
     # ==================== 角色与 RBAC 权限 ====================
 
     async def list_roles(self) -> List[RoleResponse]:
-        """获取所有角色及其权限代码列表"""
+        """获取所有角色及其权限代码列表 (附带绑定员工人数统计)"""
         stmt = (
             select(Role)
             .where(Role.is_deleted == False)
@@ -1021,6 +1117,11 @@ class IAMService:
         )
         res = await self.db.execute(stmt)
         roles = res.scalars().all()
+
+        ur_stmt = select(UserRole.role_id, func.count(UserRole.user_id)).group_by(UserRole.role_id)
+        ur_res = await self.db.execute(ur_stmt)
+        role_user_counts = dict(ur_res.all())
+
         return [
             RoleResponse(
                 id=r.id,
@@ -1030,6 +1131,8 @@ class IAMService:
                 status=r.status,
                 is_system=r.is_system,
                 permission_codes=[p.permission_code for p in r.permissions],
+                permissions=[p.permission_code for p in r.permissions],
+                user_count=role_user_counts.get(r.id, 0),
                 created_at=r.created_at,
                 updated_at=r.updated_at,
             )
@@ -1104,8 +1207,13 @@ class IAMService:
                 resource_path=meta.get("resource_path"),
             ))
 
+        role.updated_at = datetime.now(timezone.utc)
         await self.db.commit()
         await self.db.refresh(role)
+
+        ur_stmt = select(func.count(UserRole.user_id)).where(UserRole.role_id == role.id)
+        ur_cnt = (await self.db.execute(ur_stmt)).scalar() or 0
+
         return RoleResponse(
             id=role.id,
             name=role.name,
@@ -1114,6 +1222,50 @@ class IAMService:
             status=role.status,
             is_system=role.is_system,
             permission_codes=permission_codes,
+            permissions=permission_codes,
+            user_count=ur_cnt,
+            created_at=role.created_at,
+            updated_at=role.updated_at,
+        )
+
+    async def update_role(self, role_id: int, data: RoleUpdate) -> RoleResponse:
+        """更新角色基本信息或权限分配"""
+        stmt = select(Role).where(Role.id == role_id, Role.is_deleted == False).options(selectinload(Role.permissions))
+        res = await self.db.execute(stmt)
+        role = res.scalars().first()
+        if not role:
+            raise EntityNotFoundError(message=f"角色 ID {role_id} 不存在", code=40401)
+        if data.name is not None:
+            role.name = data.name
+        if data.code is not None:
+            role.code = data.code
+        if data.description is not None:
+            role.description = data.description
+        if data.status is not None:
+            role.status = data.status
+
+        perm_codes = data.permission_codes if data.permission_codes is not None else getattr(data, "permissions", None)
+        if perm_codes is not None:
+            return await self.update_role_permissions(role_id, perm_codes)
+
+        role.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(role)
+
+        codes = [p.permission_code for p in role.permissions]
+        ur_stmt = select(func.count(UserRole.user_id)).where(UserRole.role_id == role.id)
+        ur_cnt = (await self.db.execute(ur_stmt)).scalar() or 0
+
+        return RoleResponse(
+            id=role.id,
+            name=role.name,
+            code=role.code,
+            description=role.description,
+            status=role.status,
+            is_system=role.is_system,
+            permission_codes=codes,
+            permissions=codes,
+            user_count=ur_cnt,
             created_at=role.created_at,
             updated_at=role.updated_at,
         )

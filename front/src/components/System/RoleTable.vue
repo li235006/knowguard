@@ -1,6 +1,17 @@
 <template>
   <!-- FE-M3: 角色列表表格组件 (PAGE-05-B) -->
-  <div class="flex-1 bg-white rounded-xl border border-[#E5E7EB] shadow-sm flex flex-col h-full min-w-0 overflow-hidden">
+  <div class="flex-1 bg-white rounded-xl border border-[#E5E7EB] shadow-sm flex flex-col h-full min-w-0 overflow-hidden relative">
+    <!-- Top Toast Notification -->
+    <div
+      v-if="toastMessage"
+      class="fixed top-5 right-5 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl shadow-lg border text-xs font-medium transition-all duration-300 animate-in fade-in slide-in-from-top-4"
+      :class="toastType === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200'"
+    >
+      <CheckCircle2 v-if="toastType === 'success'" :size="15" class="text-emerald-600 shrink-0" />
+      <AlertCircle v-else :size="15" class="text-rose-600 shrink-0" />
+      <span>{{ toastMessage }}</span>
+    </div>
+
     <!-- Header Filter Bar -->
     <div class="p-3.5 border-b border-[#F1F5F9] flex items-center justify-between gap-3">
       <div class="relative w-64">
@@ -48,14 +59,14 @@
             <td class="py-3 px-4 font-semibold text-[#0F172A]">
               <div class="flex items-center gap-2">
                 <ShieldCheck :size="15" class="text-[#0071E3]" />
-                <span>{{ role.role_name }}</span>
+                <span>{{ role.role_name || role.name }}</span>
               </div>
             </td>
 
             <!-- Role Code -->
             <td class="py-3 px-4 font-mono text-[11px] text-[#475569]">
               <span class="px-2 py-0.5 rounded bg-gray-100 border border-gray-200">
-                {{ role.role_code }}
+                {{ role.role_code || role.code }}
               </span>
             </td>
 
@@ -74,24 +85,24 @@
             <td class="py-3 px-4">
               <div class="flex flex-wrap gap-1 max-w-xs">
                 <span
-                  v-if="role.permissions.includes('*')"
+                  v-if="(role.permissions || role.permission_codes || []).includes('*')"
                   class="px-2 py-0.5 rounded text-[10px] font-medium bg-red-50 text-red-600 border border-red-200"
                 >
                   * 全部超管通配权限
                 </span>
                 <template v-else>
                   <span
-                    v-for="perm in role.permissions.slice(0, 3)"
+                    v-for="perm in (role.permissions || role.permission_codes || []).slice(0, 3)"
                     :key="perm"
                     class="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-700"
                   >
                     {{ perm }}
                   </span>
                   <span
-                    v-if="role.permissions.length > 3"
+                    v-if="(role.permissions || role.permission_codes || []).length > 3"
                     class="px-1 py-0.5 rounded text-[10px] text-gray-400 bg-gray-50"
                   >
-                    +{{ role.permissions.length - 3 }}
+                    +{{ (role.permissions || role.permission_codes || []).length - 3 }}
                   </span>
                 </template>
               </div>
@@ -174,10 +185,10 @@
           <button
             type="button"
             class="px-3 py-1.5 text-xs bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg font-medium transition-colors disabled:opacity-50"
-            :disabled="!newRoleForm.role_name.trim() || !newRoleForm.role_code.trim()"
+            :disabled="!newRoleForm.role_name.trim() || !newRoleForm.role_code.trim() || isSubmitting"
             @click="submitCreateRole"
           >
-            确认创建
+            {{ isSubmitting ? '创建中...' : '确认创建' }}
           </button>
         </div>
       </div>
@@ -192,7 +203,7 @@
  */
 
 import { ref, reactive, computed } from 'vue'
-import { Search, ShieldPlus, ShieldCheck, X } from 'lucide-vue-next'
+import { Search, ShieldPlus, ShieldCheck, X, CheckCircle2, AlertCircle } from 'lucide-vue-next'
 import type { RoleItem } from '@/types/system'
 import { createRoleApi } from '@/api/system'
 
@@ -208,6 +219,20 @@ const emit = defineEmits<{
 
 const searchKeyword = ref('')
 const showCreateModal = ref(false)
+const isSubmitting = ref(false)
+
+const toastMessage = ref('')
+const toastType = ref<'success' | 'error'>('success')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+  toastMessage.value = msg
+  toastType.value = type
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => {
+    toastMessage.value = ''
+  }, 3000)
+}
 
 const newRoleForm = reactive({
   role_name: '',
@@ -220,24 +245,34 @@ const filteredRoles = computed(() => {
   const q = searchKeyword.value.trim().toLowerCase()
   return props.roles.filter(
     (r) =>
-      r.role_name.toLowerCase().includes(q) ||
-      r.role_code.toLowerCase().includes(q) ||
+      (r.role_name && r.role_name.toLowerCase().includes(q)) ||
+      (r.name && r.name.toLowerCase().includes(q)) ||
+      (r.role_code && r.role_code.toLowerCase().includes(q)) ||
+      (r.code && r.code.toLowerCase().includes(q)) ||
       (r.description && r.description.toLowerCase().includes(q))
   )
 })
 
 const submitCreateRole = async () => {
+  if (!newRoleForm.role_name.trim() || !newRoleForm.role_code.trim()) return
+  isSubmitting.value = true
   try {
-    await createRoleApi({
+    const res = await createRoleApi({
       role_name: newRoleForm.role_name.trim(),
       role_code: newRoleForm.role_code.trim().toUpperCase(),
       description: newRoleForm.description.trim(),
       permissions: ['knowledge:view']
     })
     showCreateModal.value = false
+    showToast(`自定义角色 [${res.data?.role_name || newRoleForm.role_name}] 创建成功`)
+    newRoleForm.role_name = ''
+    newRoleForm.role_code = ''
+    newRoleForm.description = ''
     emit('refresh')
   } catch (err) {
-    alert(err instanceof Error ? err.message : '创建角色失败')
+    showToast(err instanceof Error ? err.message : '创建角色失败', 'error')
+  } finally {
+    isSubmitting.value = false
   }
 }
 </script>
