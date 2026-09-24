@@ -1,6 +1,33 @@
 <template>
   <!-- FE-M4: 知识资产台账数据表格 (PAGE-03 原型精确对齐) -->
   <div class="w-full bg-white rounded-xl border border-[#E5E7EB] shadow-sm flex flex-col min-w-0 overflow-hidden">
+    <!-- Batch Action Toolbar (When rows are selected) -->
+    <div
+      v-if="selectedIds.size > 0"
+      class="bg-blue-50/90 border-b border-blue-200 px-4 py-2 flex items-center justify-between transition-all shrink-0"
+    >
+      <div class="flex items-center gap-2 text-xs text-[#0071E3] font-medium">
+        <span>已选中 {{ selectedIds.size }} 项知识资产</span>
+        <button
+          type="button"
+          class="text-xs text-[#64748B] hover:text-[#0F172A] underline ml-2 cursor-pointer"
+          @click="clearSelection"
+        >
+          取消选择
+        </button>
+      </div>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+          @click="showBatchDeleteModal = true"
+        >
+          <Trash2 :size="12" />
+          <span>批量删除 ({{ selectedIds.size }})</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Table Container -->
     <div class="relative flex-1 overflow-x-auto overflow-y-auto">
       <!-- Loading Overlay -->
@@ -357,6 +384,44 @@
         </div>
       </div>
     </div>
+
+    <!-- Batch Delete Modal -->
+    <div
+      v-if="showBatchDeleteModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px] p-4"
+    >
+      <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-gray-100 flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150">
+        <div class="flex items-start gap-3">
+          <div class="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+            <Trash2 :size="20" />
+          </div>
+          <div>
+            <h3 class="font-semibold text-sm text-[#0F172A]">确认批量物理销毁所选 {{ selectedIds.size }} 篇资产？</h3>
+            <p class="text-xs text-[#64748B] mt-1 leading-relaxed">
+              此操作将永久物理删除选中的所有文档及其在向量数据库中对应的切片与索引，无法撤回。
+            </p>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-[#F1F5F9]">
+          <button
+            type="button"
+            class="px-4 py-2 text-xs text-[#475569] hover:bg-gray-100 rounded-lg transition-colors font-medium cursor-pointer"
+            @click="showBatchDeleteModal = false"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            class="px-4 py-2 text-xs bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium transition-colors shadow-sm inline-flex items-center gap-1.5 cursor-pointer"
+            @click="confirmBatchDelete"
+          >
+            <Trash2 :size="13" />
+            <span>确认批量销毁 ({{ selectedIds.size }})</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -397,6 +462,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'toggle-status', unit: KnowledgeUnit): void
   (e: 'delete-unit', unitId: number): void
+  (e: 'batch-delete', unitIds: number[]): void
   (e: 'page-change', page: number): void
   (e: 'page-size-change', size: number): void
   (e: 'view-chunks', unit: KnowledgeUnit): void
@@ -408,6 +474,18 @@ const selectedIds = ref<Set<number>>(new Set())
 const isUpdatingStatus = ref<number | null>(null)
 const unitToDelete = ref<KnowledgeUnit | null>(null)
 const isDeleting = ref<boolean>(false)
+const showBatchDeleteModal = ref<boolean>(false)
+
+const clearSelection = () => {
+  selectedIds.value.clear()
+}
+
+const confirmBatchDelete = () => {
+  const ids = Array.from(selectedIds.value)
+  emit('batch-delete', ids)
+  clearSelection()
+  showBatchDeleteModal.value = false
+}
 
 const totalPages = computed(() => Math.ceil(props.total / props.pageSize) || 1)
 

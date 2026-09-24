@@ -108,27 +108,43 @@ class QwenProvider(BaseLLMProvider):
 
     def _synthesize_local_response(self, prompt: str) -> list[str]:
         """根据 Prompt 中的知识切片与提问提炼出流式词元列表"""
-        # 提取问题
+        # 1. 提取用户提问
         query_text = ""
-        if "【用户问题】" in prompt:
-            parts = prompt.split("【用户问题】")
-            if len(parts) > 1:
-                query_text = parts[1].split("\n")[0].replace("：", "").strip()
+        for q_marker in ["【当前用户提问】", "【用户问题】", "【用户提问】"]:
+            if q_marker in prompt:
+                parts = prompt.split(q_marker)
+                if len(parts) > 1:
+                    query_text = parts[1].split("\n")[0].replace("：", "").replace(":", "").strip()
+                break
 
-        # 提取上下文关键信息
+        # 2. 提取参考权威知识切片正文
         context_snippets = []
         if "【参考权威知识切片】" in prompt:
             ctx_part = prompt.split("【参考权威知识切片】")[1]
-            if "【用户问题】" in ctx_part:
-                ctx_part = ctx_part.split("【用户问题】")[0]
-            context_snippets = [line.strip() for line in ctx_part.split("\n") if line.strip() and not line.startswith("---")]
+            for end_marker in ["【当前用户提问】", "【用户问题】", "【用户提问】", "请结合前序"]:
+                if end_marker in ctx_part:
+                    ctx_part = ctx_part.split(end_marker)[0]
+            # 过滤孤立冒号与分割线
+            raw_lines = [line.strip() for line in ctx_part.split("\n")]
+            substantive_lines = []
+            for l in raw_lines:
+                if not l or l == ":" or l == "：" or l.startswith("---"):
+                    continue
+                substantive_lines.append(l)
+            context_snippets = substantive_lines
 
-        # 组织专业解答文本
+        # 3. 组织高质量解答正文
         if context_snippets:
             lead = "根据企业知识库中经4D-RBAC安全授权的参考文档，为您解答如下：\n\n"
-            summary = "\n".join(context_snippets[:2])
+            # 提取实质内容（跳过纯文档标头）
+            content_lines = [l for l in context_snippets if not l.startswith("【参考文档")]
+            if content_lines:
+                body_content = "\n\n".join(content_lines[:8])
+            else:
+                body_content = "\n\n".join(context_snippets[:8])
+
             conclusion = "\n\n以上内容均经过企业知识安全护栏合规审查，若有进一步问题可随时咨询。"
-            full_text = lead + summary + conclusion
+            full_text = f"{lead}{body_content}{conclusion}"
         else:
             full_text = "根据已授权的企业知识库规范，当前为您查询到相关说明，请参考上述切片内容进行业务办理。"
 

@@ -65,6 +65,7 @@ class KnowledgeUnitResponse(BaseModel):
     category: str = Field(default="DEFAULT", description="知识分类")
     status: str = Field(..., description="状态: PENDING / PARSING / CHUNKING / INDEXED / FAILED")
     chunk_count: int = Field(default=0, description="切片总数")
+    permission_summary: Optional[str] = Field(default="全员公开", description="4D数据权限策略概要描述")
     error_message: Optional[str] = Field(None, description="异常报错信息")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: Optional[datetime] = Field(None, description="更新时间")

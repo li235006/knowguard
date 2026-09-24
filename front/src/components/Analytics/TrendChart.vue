@@ -48,20 +48,22 @@ const initChart = () => {
     chartInstance = echarts.init(chartRef.value)
   }
 
-  const trends: any[] = analyticsStore.tokenTrends.length > 0 ? analyticsStore.tokenTrends : [
-    { time: '00:00', prompt_tokens: 120000, completion_tokens: 45000, qps: 8 },
-    { time: '06:00', prompt_tokens: 80000, completion_tokens: 30000, qps: 4 },
-    { time: '09:00', prompt_tokens: 380000, completion_tokens: 140000, qps: 32 },
-    { time: '12:00', prompt_tokens: 290000, completion_tokens: 110000, qps: 24 },
-    { time: '15:00', prompt_tokens: 450000, completion_tokens: 180000, qps: 45 },
-    { time: '18:00', prompt_tokens: 320000, completion_tokens: 130000, qps: 28 },
-    { time: '20:00', prompt_tokens: 210000, completion_tokens: 90000, qps: 16 }
+  const defaultEmptyTrends = [
+    { time: '00:00', prompt_tokens: 0, completion_tokens: 0, qps: 0 },
+    { time: '04:00', prompt_tokens: 0, completion_tokens: 0, qps: 0 },
+    { time: '08:00', prompt_tokens: 0, completion_tokens: 0, qps: 0 },
+    { time: '12:00', prompt_tokens: 0, completion_tokens: 0, qps: 0 },
+    { time: '16:00', prompt_tokens: 0, completion_tokens: 0, qps: 0 },
+    { time: '20:00', prompt_tokens: 0, completion_tokens: 0, qps: 0 },
+    { time: '24:00', prompt_tokens: 0, completion_tokens: 0, qps: 0 }
   ]
+
+  const trends: any[] = analyticsStore.tokenTrends.length > 0 ? analyticsStore.tokenTrends : defaultEmptyTrends
 
   const xData = trends.map((t: any) => t.time || (t.date ? t.date.substring(5) : '00:00'))
   const promptData = trends.map((t: any) => Math.round((t.prompt_tokens || 0) / 1000))
   const compData = trends.map((t: any) => Math.round((t.completion_tokens || 0) / 1000))
-  const qpsData = trends.map((t: any) => t.qps ?? (t.pv ? Math.max(1, Math.round(t.pv / 60)) : 10))
+  const qpsData = trends.map((t: any) => t.qps ?? (t.pv ? Math.round(t.pv / 60) : 0))
 
   const option: echarts.EChartsOption = {
     tooltip: {

@@ -21,21 +21,6 @@
           <h2 class="font-bold text-xs text-[#0F172A] truncate">
             {{ activeTitle }}
           </h2>
-          <span
-            class="px-2 py-0.5 rounded text-[10px] font-mono bg-blue-50 text-[#0071E3] border border-blue-200 shrink-0"
-          >
-            Qwen-Plus · 知识库 RAG 增强
-          </span>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <!-- 4D-RBAC Security Engine Status Badge -->
-          <div
-            class="flex items-center gap-1.5 px-2.5 py-1 bg-[#F0FDF4] border border-[#BBF7D0] rounded-full text-[11px] text-[#16A34A] font-medium"
-          >
-            <span class="w-1.5 h-1.5 rounded-full bg-[#16A34A] animate-pulse"></span>
-            <span>4D-RBAC 动态鉴权护栏在线</span>
-          </div>
         </div>
       </header>
 

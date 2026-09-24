@@ -40,12 +40,12 @@ export const useEvolutionStore = defineStore('evolution', () => {
 
   // 顶层 4 大度量指标
   const metrics = ref<EvolutionMetrics>({
-    unresolved_gaps_count: 14,
-    unresolved_gaps_delta: '↑ 3个 本周新增',
-    pending_candidates_count: 8,
-    clustering_accuracy: '94.2%',
-    avg_resolution_days: 1.8,
-    resolution_speedup_percent: 35
+    unresolved_gaps_count: 0,
+    unresolved_gaps_delta: '-',
+    pending_candidates_count: 0,
+    clustering_accuracy: '0.0%',
+    avg_resolution_days: 0,
+    resolution_speedup_percent: 0
   })
 
   // 候选 FAQ 列表

@@ -76,7 +76,7 @@ BUILTIN_ROLES = [
         "is_system": True,
     },
     {
-        "code": "ROLE_EMPLOYEE",
+        "code": "ROLE_COMMON_USER",
         "name": "普通员工",
         "description": "仅具备问答工作台、个人历史会话及放行知识查阅权限",
         "is_system": True,
@@ -85,12 +85,6 @@ BUILTIN_ROLES = [
         "code": "ROLE_AUDITOR",
         "name": "合规审计员",
         "description": "负责安全审计日志调阅、合规拦截监控与风险态势感知",
-        "is_system": True,
-    },
-    {
-        "code": "ROLE_COMMON_USER",
-        "name": "普通用户",
-        "description": "普通员工与访客默认角色 (兼容别名)",
         "is_system": True,
     },
     {

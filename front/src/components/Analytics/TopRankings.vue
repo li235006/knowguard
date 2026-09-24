@@ -31,8 +31,12 @@
     <div class="space-y-2 mt-3 flex-1 flex flex-col justify-around">
       <!-- Tab 1: Queries -->
       <template v-if="activeTab === 'queries'">
+        <div v-if="topQueries.length === 0" class="py-10 text-center text-slate-400 text-xs">
+          暂无高频提问数据
+        </div>
         <div
           v-for="item in topQueries"
+          v-else
           :key="item.rank"
           class="flex items-center justify-between gap-2.5 hover:bg-slate-50 px-2 py-1.5 rounded-lg transition-colors"
         >
@@ -55,8 +59,12 @@
 
       <!-- Tab 2: Knowledge Documents -->
       <template v-else>
+        <div v-if="topKnowledge.length === 0" class="py-10 text-center text-slate-400 text-xs">
+          暂无知识引用数据
+        </div>
         <div
           v-for="item in topKnowledge"
+          v-else
           :key="item.rank"
           class="flex items-center justify-between gap-2.5 hover:bg-slate-50 px-2 py-1.5 rounded-lg transition-colors"
         >
@@ -93,42 +101,26 @@ import type { TopQueryItem, TopKnowledgeItem } from '@/types/analytics'
 const analyticsStore = useAnalyticsStore()
 const activeTab = ref<'queries' | 'knowledge'>('queries')
 
-const fallbackQueries: TopQueryItem[] = [
-  { rank: 1, query: '差旅与住宿报销标准及额度', count: 142 },
-  { rank: 2, query: '跨境清关关税与港口延误预警', count: 118 },
-  { rank: 3, query: '年假与带薪病假折算规则', count: 96 },
-  { rank: 4, query: '研发内网 VPN 与堡垒机权限', count: 84 },
-  { rank: 5, query: '供应商准入资质与付款账期', count: 72 }
-]
-
-const fallbackKnowledge: TopKnowledgeItem[] = [
-  { rank: 1, title: '《员工差旅与住宿报销管理规范》', count: 186 },
-  { rank: 2, title: '《跨境电商出口清关与税务政策指南》', count: 145 },
-  { rank: 3, title: '《企业考勤管理与法定假期实施办法》', count: 129 },
-  { rank: 4, title: '《研发基础架构与内网安全访问指引》', count: 112 },
-  { rank: 5, title: '《供应链采购流程与供应商管理办法》', count: 98 }
-]
-
 const topQueries = computed<TopQueryItem[]>(() => {
-  if (analyticsStore.topRankings.top_queries?.length > 0) {
+  if (analyticsStore.topRankings?.top_queries?.length > 0) {
     return analyticsStore.topRankings.top_queries.map((item: any, idx: number) => ({
       rank: item.rank || idx + 1,
       query: item.query || item.title || '',
       count: item.count ?? item.hit_count ?? 0
     }))
   }
-  return fallbackQueries
+  return []
 })
 
 const topKnowledge = computed<TopKnowledgeItem[]>(() => {
-  if (analyticsStore.topRankings.top_knowledge?.length > 0) {
+  if (analyticsStore.topRankings?.top_knowledge?.length > 0) {
     return analyticsStore.topRankings.top_knowledge.map((item: any, idx: number) => ({
       rank: item.rank || idx + 1,
       title: item.title || item.query || '',
       count: item.count ?? item.hit_count ?? 0
     }))
   }
-  return fallbackKnowledge
+  return []
 })
 
 const getRankBadgeClass = (rank: number): string => {

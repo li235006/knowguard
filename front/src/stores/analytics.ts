@@ -24,21 +24,21 @@ import {
 export const useAnalyticsStore = defineStore('analytics', () => {
   // 5 大核心 KPI 概览指标
   const summary = ref<DashboardSummary>({
-    pv: 34280,
-    uv: 2840,
-    pv_uv_delta: '↑ 12.4% 较昨日',
-    knowledge_units_count: 128,
-    chunks_count: 1420,
-    units_synced: 124,
-    units_pending: 4,
-    faq_cache_hit_rate: '41.8%',
-    tokens_saved: '节约 8.4M Token',
-    avg_latency_ms: 380,
-    p95_latency_ms: 820,
-    p99_latency: '1.2s',
-    unresolved_gaps_count: 14,
-    unresolved_gaps_delta: '↑ 3个 本周新增',
-    published_faqs_count: 86
+    pv: 0,
+    uv: 0,
+    pv_uv_delta: '0% 较昨日',
+    knowledge_units_count: 0,
+    chunks_count: 0,
+    units_synced: 0,
+    units_pending: 0,
+    faq_cache_hit_rate: '0.0%',
+    tokens_saved: '0 Token',
+    avg_latency_ms: 0,
+    p95_latency_ms: 0,
+    p99_latency: '0ms',
+    unresolved_gaps_count: 0,
+    unresolved_gaps_delta: '0个 本周新增',
+    published_faqs_count: 0
   })
 
   // ECharts 图表数据

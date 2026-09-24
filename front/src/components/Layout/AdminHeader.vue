@@ -12,14 +12,6 @@
 
     <!-- Right: Engine Status & Identity Badge -->
     <div class="flex items-center gap-3">
-      <!-- Guard Security Engine Status Badge -->
-      <div
-        class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-[#F0FDF4] border border-[#BBF7D0] rounded-full text-[11px] text-[#16A34A] font-medium"
-      >
-        <span class="w-1.5 h-1.5 rounded-full bg-[#16A34A] animate-pulse"></span>
-        <span>4D-RBAC 动态鉴权护栏在线</span>
-      </div>
-
       <!-- Current Employee Badge -->
       <div v-if="authStore.user" class="flex items-center gap-1.5 px-2.5 py-1 bg-gray-50 border border-gray-200 rounded-lg text-xs text-[#475569]">
         <span class="font-mono text-[#0071E3] font-bold">{{ authStore.user.employee_id }}</span>

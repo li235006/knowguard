@@ -219,3 +219,13 @@ class FAQMatchResponse(BaseModel):
     standard_answer: Optional[str] = Field(default=None, description="标准答")
     similarity: Optional[float] = Field(default=None, description="匹配相似度分值")
     hit_count: Optional[int] = Field(default=None, description="累计直出命中频次")
+
+
+class EvolutionMetricsResponse(BaseModel):
+    """自进化运营指标响应 (PAGE-06 对齐)"""
+    unresolved_gaps_count: int = Field(default=0, description="未闭环知识缺口数")
+    unresolved_gaps_delta: str = Field(default="0个 待闭环", description="缺口动态")
+    pending_candidates_count: int = Field(default=0, description="待审核 FAQ 候选数")
+    clustering_accuracy: str = Field(default="0.0%", description="自动聚类准确率")
+    avg_resolution_days: float = Field(default=0.0, description="平均闭环天数")
+    resolution_speedup_percent: int = Field(default=0, description="提效百分比")

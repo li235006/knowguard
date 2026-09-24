@@ -76,7 +76,7 @@
         <div class="flex items-center justify-between text-xs text-[#64748B]">
           <span class="font-medium">正在解析中</span>
           <div class="w-7 h-7 rounded-lg bg-blue-50 text-[#0071E3] flex items-center justify-center">
-            <RefreshCw :size="14" class="animate-spin" />
+            <RefreshCw :size="14" :class="{ 'animate-spin': knowledgeStore.metrics.parsing > 0 }" />
           </div>
         </div>
         <div class="flex items-baseline gap-2 mt-2">
@@ -126,6 +126,7 @@
       :page-size="knowledgeStore.pageSize"
       @toggle-status="handleToggleStatus"
       @delete-unit="handleDeleteUnit"
+      @batch-delete="handleBatchDelete"
       @page-change="handlePageChange"
       @page-size-change="handlePageSizeChange"
       @view-chunks="handleViewChunks"
@@ -337,10 +338,16 @@
           </select>
         </div>
 
-        <!-- Pipeline Notice -->
-        <div class="bg-blue-50/50 border border-blue-100 rounded-xl p-3 text-[11px] text-[#0071E3] flex items-start gap-2">
-          <Info :size="14" class="shrink-0 mt-0.5" />
-          <span>批量上传完成后，系统将自动触发滑动切片流水线并将其写入本地与向量知识检索库。</span>
+        <!-- Pipeline & Permission Notice -->
+        <div class="space-y-2">
+          <div class="bg-blue-50/50 border border-blue-100 rounded-xl p-3 text-[11px] text-[#0071E3] flex items-start gap-2">
+            <Info :size="14" class="shrink-0 mt-0.5" />
+            <span>批量上传完成后，系统将自动触发滑动切片流水线并将其写入本地与向量知识检索库。</span>
+          </div>
+          <div class="bg-amber-50/60 border border-amber-200/60 rounded-xl p-3 text-[11px] text-amber-800 flex items-start gap-2">
+            <ShieldCheck :size="14" class="shrink-0 mt-0.5 text-amber-600" />
+            <span><strong>权限说明</strong>：此处的“业务分类”仅作为文档领域归类。文档入库后默认全员公开；如需设置为“<strong>仅管理员可见</strong>”或指定部门可见，请在上传完成后点击列表对应行右侧的【<strong>权限设置</strong>】进行四维精准授权。</span>
+          </div>
         </div>
 
         <!-- Modal Actions -->
@@ -520,6 +527,19 @@ const handleDeleteUnit = async (unitId: number) => {
     showToast('知识资产及关联分块向量已永久销毁')
   } catch (err) {
     showToast(err instanceof Error ? err.message : '销毁知识资产失败', 'error')
+  }
+}
+
+// 批量删除执行
+const handleBatchDelete = async (unitIds: number[]) => {
+  if (!unitIds || unitIds.length === 0) return
+  try {
+    for (const id of unitIds) {
+      await knowledgeStore.deleteUnit(id)
+    }
+    showToast(`成功批量物理销毁 ${unitIds.length} 篇知识资产及其向量`)
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : '批量删除失败', 'error')
   }
 }
 

@@ -24,6 +24,7 @@ if str(backend_dir) not in sys.path:
 
 from typing import List, Optional
 from fastapi import APIRouter, Body, Depends, File, Form, Query, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -158,7 +159,32 @@ async def list_knowledge_units(
         status=status,
         keyword=keyword,
     )
-    res_items = [KnowledgeUnitResponse.model_validate(item) for item in items]
+    # 批量解析各文档 4D 权限策略概要
+    doc_ids = [item.id for item in items]
+    policy_map = {}
+    if doc_ids:
+        from app.models.policy import PermissionPolicy
+        p_res = await db.execute(select(PermissionPolicy).where(PermissionPolicy.unit_id.in_(doc_ids)))
+        for p in p_res.scalars().all():
+            policy_map[p.unit_id] = p
+
+    res_items = []
+    for item in items:
+        resp = KnowledgeUnitResponse.model_validate(item)
+        pol = policy_map.get(item.id)
+        if pol is None or pol.is_public or pol.is_global:
+            resp.permission_summary = "全员公开"
+        else:
+            parts = []
+            if pol.department_ids and len(pol.department_ids) > 0:
+                parts.append(f"部门({len(pol.department_ids)})")
+            if pol.role_ids and len(pol.role_ids) > 0:
+                parts.append(f"角色({len(pol.role_ids)})")
+            if pol.user_ids and len(pol.user_ids) > 0:
+                parts.append(f"特权直属({len(pol.user_ids)})")
+            resp.permission_summary = " / ".join(parts) if parts else "受限私有 (无授权)"
+        res_items.append(resp)
+
     paginated_data = PaginatedResponse(
         total=total,
         page=page,
@@ -183,10 +209,26 @@ async def get_knowledge_unit_detail(
     doc = await service.get_document_by_id(doc_id)
     if not doc:
         raise NotFoundError(message=f"知识文档 ID={doc_id} 不存在", code=40401)
+    resp = KnowledgeUnitResponse.model_validate(doc)
+    from app.models.policy import PermissionPolicy
+    p_res = await db.execute(select(PermissionPolicy).where(PermissionPolicy.unit_id == doc_id))
+    pol = p_res.scalar_one_or_none()
+    if pol is None or pol.is_public or pol.is_global:
+        resp.permission_summary = "全员公开"
+    else:
+        parts = []
+        if pol.department_ids and len(pol.department_ids) > 0:
+            parts.append(f"部门({len(pol.department_ids)})")
+        if pol.role_ids and len(pol.role_ids) > 0:
+            parts.append(f"角色({len(pol.role_ids)})")
+        if pol.user_ids and len(pol.user_ids) > 0:
+            parts.append(f"特权直属({len(pol.user_ids)})")
+        resp.permission_summary = " / ".join(parts) if parts else "受限私有 (无授权)"
+
     return StandardResponse(
         code=200,
         message="获取文档详情成功",
-        data=KnowledgeUnitResponse.model_validate(doc),
+        data=resp,
     )
 
 

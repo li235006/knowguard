@@ -34,55 +34,6 @@
           <p class="text-[13px] text-[#475569]">登录您的企业账户</p>
         </div>
 
-        <!-- Quick Demo Fill Section (支持张三 10086、李四 10087、王五 10088 快捷填充) -->
-        <div class="bg-[#F8FAFC] rounded-xl border border-[#E5E7EB] p-3 flex flex-col gap-2">
-          <div class="flex items-center justify-between text-[11px] text-[#64748B]">
-            <span class="font-medium">快速调试与身份切换：</span>
-            <span class="text-[10px] text-[#94A3B8]">点击填充工号与密码</span>
-          </div>
-          <div class="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border text-center transition-all"
-              :class="
-                loginForm.username === '10086'
-                  ? 'bg-[#EFF6FF] border-[#0071E3] text-[#0071E3] shadow-xs'
-                  : 'bg-white border-[#E2E8F0] text-[#475569] hover:border-gray-300 hover:bg-gray-50'
-              "
-              @click="fillAccount('10086', '123456')"
-            >
-              <span class="text-xs font-semibold">张三</span>
-              <span class="text-[10px] text-[#64748B]">普通员工 (10086)</span>
-            </button>
-            <button
-              type="button"
-              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border text-center transition-all"
-              :class="
-                loginForm.username === '10087'
-                  ? 'bg-[#EFF6FF] border-[#0071E3] text-[#0071E3] shadow-xs'
-                  : 'bg-white border-[#E2E8F0] text-[#475569] hover:border-gray-300 hover:bg-gray-50'
-              "
-              @click="fillAccount('10087', '123456')"
-            >
-              <span class="text-xs font-semibold">李四</span>
-              <span class="text-[10px] text-[#64748B]">知识管理 (10087)</span>
-            </button>
-            <button
-              type="button"
-              class="flex flex-col items-center justify-center py-1.5 px-1 rounded-lg border text-center transition-all"
-              :class="
-                loginForm.username === '10088'
-                  ? 'bg-[#EFF6FF] border-[#0071E3] text-[#0071E3] shadow-xs'
-                  : 'bg-white border-[#E2E8F0] text-[#475569] hover:border-gray-300 hover:bg-gray-50'
-              "
-              @click="fillAccount('10088', '123456')"
-            >
-              <span class="text-xs font-semibold">王五</span>
-              <span class="text-[10px] text-[#64748B]">研发主管 (10088)</span>
-            </button>
-          </div>
-        </div>
-
         <!-- Error Notification Banner -->
         <div
           v-if="errorMessage"
@@ -105,7 +56,7 @@
                 id="username"
                 v-model="loginForm.username"
                 type="text"
-                placeholder="请输入工号 (如: 10086) 或登录名"
+                placeholder="请输入工号或用户名"
                 class="w-full bg-transparent text-[13px] text-[#0F172A] placeholder-[#94A3B8] focus:outline-none"
                 autocomplete="username"
                 required
@@ -125,7 +76,7 @@
                   id="password"
                   v-model="loginForm.password"
                   :type="showPassword ? 'text' : 'password'"
-                  placeholder="••••••••••••"
+                  placeholder="请输入登录密码"
                   class="w-full bg-transparent text-[13px] text-[#0F172A] placeholder-[#94A3B8] focus:outline-none"
                   autocomplete="current-password"
                   required
@@ -133,8 +84,8 @@
               </div>
               <button
                 type="button"
-                class="text-[#94A3B8] hover:text-[#475569] p-1 transition-colors"
-                @click="showPassword = !showPassword"
+                class="text-[#94A3B8] hover:text-[#475569] p-1 transition-colors cursor-pointer"
+                @click.stop.prevent="togglePasswordVisibility"
                 tabindex="-1"
               >
                 <EyeOff v-if="showPassword" :size="15" />
@@ -220,8 +171,8 @@ const route = useRoute()
 const authStore = useAuthStore()
 
 const loginForm = reactive({
-  username: '10086',
-  password: '••••••••••••'
+  username: '',
+  password: ''
 })
 
 const showPassword = ref(false)
@@ -230,10 +181,8 @@ const isSubmitting = ref(false)
 const errorMessage = ref('')
 const showHelpAlert = ref(false)
 
-const fillAccount = (u: string, p: string) => {
-  loginForm.username = u
-  loginForm.password = p
-  errorMessage.value = ''
+const togglePasswordVisibility = () => {
+  showPassword.value = !showPassword.value
 }
 
 const handleForgotPassword = () => {

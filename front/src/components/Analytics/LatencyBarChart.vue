@@ -7,7 +7,7 @@
         <h3 class="text-xs font-semibold text-[#0F172A]">端到端响应耗时分布</h3>
       </div>
       <span class="text-[11px] font-mono font-medium text-[#0071E3] bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100">
-        平均 {{ analyticsStore.summary.avg_latency_ms || 380 }}ms
+        平均 {{ analyticsStore.summary.avg_latency_ms || 0 }}ms
       </span>
     </div>
 
@@ -46,18 +46,18 @@ import type { LatencyBucket } from '@/types/analytics'
 
 const analyticsStore = useAnalyticsStore()
 
-const fallbackDistribution: LatencyBucket[] = [
-  { label: '< 50ms (FAQ直出)', percent: 41.8 },
-  { label: '50-200ms (小切片)', percent: 22.4 },
-  { label: '200-500ms (多跳)', percent: 18.2 },
-  { label: '500ms-1s (重排)', percent: 12.1 },
-  { label: '> 1s (长上下文)', percent: 5.5 }
+const defaultEmptyDistribution: LatencyBucket[] = [
+  { label: '< 50ms (FAQ直出)', percent: 0 },
+  { label: '50-200ms (小切片)', percent: 0 },
+  { label: '200-500ms (多跳)', percent: 0 },
+  { label: '500ms-1s (重排)', percent: 0 },
+  { label: '> 1s (长上下文)', percent: 0 }
 ]
 
 const distributionList = computed<LatencyBucket[]>(() => {
   return analyticsStore.latencyDistribution.length > 0
     ? analyticsStore.latencyDistribution
-    : fallbackDistribution
+    : defaultEmptyDistribution
 })
 
 const getBarColor = (index: number): string => {

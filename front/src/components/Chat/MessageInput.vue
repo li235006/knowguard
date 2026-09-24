@@ -36,14 +36,7 @@
       ></textarea>
 
       <!-- Input Toolbar -->
-      <div class="flex items-center justify-between pt-1 border-t border-[#F8FAFC]">
-        <div class="flex items-center gap-2 text-[11px] text-[#94A3B8]">
-          <span class="px-2 py-0.5 rounded bg-gray-100 font-mono text-[10px] text-gray-600">
-            Qwen-Plus · RAG 增强
-          </span>
-          <span class="hidden sm:inline">企业 4D-RBAC 安全护栏开启</span>
-        </div>
-
+      <div class="flex items-center justify-end pt-1 border-t border-[#F8FAFC]">
         <div class="flex items-center gap-2">
           <!-- Stop Button -->
           <button

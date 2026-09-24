@@ -188,7 +188,7 @@
                   :key="role.id"
                   class="flex items-center justify-between px-2.5 py-1.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] text-[#B45309] text-xs font-medium"
                 >
-                  <span class="truncate">{{ role.role_name }}</span>
+                  <span class="truncate">{{ role.role_name || role.name }}</span>
                   <button
                     type="button"
                     class="text-[#B45309] hover:text-red-600 p-0.5 ml-1 transition-colors"
@@ -213,7 +213,7 @@
                       :key="role.id"
                       :value="role.id"
                     >
-                      + {{ role.role_name }} ({{ role.role_code }})
+                      + {{ role.role_name || role.name }} ({{ role.role_code || role.code }})
                     </option>
                   </select>
                 </div>
@@ -485,7 +485,13 @@ const loadAllData = async (unitId: number) => {
     ])
 
     if (deptRes.data) rawDepartmentTree.value = deptRes.data
-    if (roleRes.data) allRoles.value = roleRes.data
+    if (roleRes.data) {
+      allRoles.value = (roleRes.data || []).map((r: any) => ({
+        ...r,
+        role_name: r.role_name || r.name,
+        role_code: r.role_code || r.code
+      }))
+    }
     if (userRes.data?.items) allUsers.value = userRes.data.items
 
     if (policyRes.data) {
