@@ -156,6 +156,33 @@ class RAGService:
                     if conv:
                         conv.message_count += 2
                     await self.db.commit()
+
+                    # 记录 FAQ 命中审计日志
+                    try:
+                        from app.services.analytics_service import AnalyticsService
+                        analytics_svc = AnalyticsService(db=self.db)
+                        await analytics_svc.record_audit_log({
+                            "trace_id": tr_id,
+                            "conversation_id": conv_id,
+                            "user_id": user_context.user_id if user_context else None,
+                            "username": user_context.username if user_context else "anonymous",
+                            "employee_id": user_context.employee_id if user_context else None,
+                            "user_dept": getattr(user_context, "dept_name", None),
+                            "user_role": getattr(user_context, "role_code", None),
+                            "query_text": clean_query,
+                            "answer_snippet": faq_answer[:200],
+                            "recalled_chunk_ids": [],
+                            "allowed_chunk_ids": [],
+                            "restricted_chunk_ids": [],
+                            "is_blocked": False,
+                            "block_reason": "FAQ_CACHE_HIT",
+                            "prompt_tokens": len(clean_query),
+                            "completion_tokens": len(faq_answer),
+                            "total_tokens": len(clean_query) + len(faq_answer),
+                            "latency_ms": 12.0,
+                        })
+                    except Exception as audit_err:
+                        logger.warning(f"[RAGService] FAQ hit audit logging warning: {audit_err}")
                 except Exception as msg_err:
                     logger.warning(f"[RAGService] FAQ message persistence warning: {msg_err}")
                 return
@@ -240,6 +267,33 @@ class RAGService:
                 )
             except Exception as gap_err:
                 logger.warning(f"[RAGService] Record knowledge gap warning: {gap_err}")
+
+            # 自动记录全链路安全审计日志 (Audit Log)
+            try:
+                from app.services.analytics_service import AnalyticsService
+                analytics_svc = AnalyticsService(db=self.db)
+                await analytics_svc.record_audit_log({
+                    "trace_id": tr_id,
+                    "conversation_id": conv_id,
+                    "user_id": user_context.user_id if user_context else None,
+                    "username": user_context.username if user_context else "anonymous",
+                    "employee_id": user_context.employee_id if user_context else None,
+                    "user_dept": getattr(user_context, "dept_name", None),
+                    "user_role": getattr(user_context, "role_code", None),
+                    "query_text": clean_query,
+                    "answer_snippet": fallback_text[:200],
+                    "recalled_chunk_ids": candidate_chunk_ids,
+                    "allowed_chunk_ids": allowed_chunk_ids,
+                    "restricted_chunk_ids": restricted_chunk_ids,
+                    "is_blocked": True,
+                    "block_reason": "PERMISSION_ISOLATION" if restricted_chunk_ids else "NO_HITS",
+                    "prompt_tokens": len(clean_query),
+                    "completion_tokens": len(fallback_text),
+                    "total_tokens": len(clean_query) + len(fallback_text),
+                    "latency_ms": 25.0,
+                })
+            except Exception as audit_err:
+                logger.warning(f"[RAGService] Record audit log warning: {audit_err}")
 
             # 发送完成帧并安全退出，绝不泄露受限切片信息
             yield ChatEventPayload(
@@ -361,6 +415,33 @@ class RAGService:
             await self.db.commit()
         except Exception as e:
             logger.error(f"[RAGService] Failed to persist completions message: {e}")
+
+        # 自动记录全链路安全审计日志 (Audit Log)
+        try:
+            from app.services.analytics_service import AnalyticsService
+            analytics_svc = AnalyticsService(db=self.db)
+            await analytics_svc.record_audit_log({
+                "trace_id": tr_id,
+                "conversation_id": conv_id,
+                "user_id": user_context.user_id if user_context else None,
+                "username": user_context.username if user_context else "anonymous",
+                "employee_id": user_context.employee_id if user_context else None,
+                "user_dept": getattr(user_context, "dept_name", None),
+                "user_role": getattr(user_context, "role_code", None),
+                "query_text": clean_query,
+                "answer_snippet": full_assistant_answer[:200],
+                "recalled_chunk_ids": candidate_chunk_ids,
+                "allowed_chunk_ids": allowed_chunk_ids,
+                "restricted_chunk_ids": restricted_chunk_ids,
+                "is_blocked": bool(restricted_chunk_ids),
+                "block_reason": "PARTIAL_ISOLATION" if restricted_chunk_ids else None,
+                "prompt_tokens": len(clean_query),
+                "completion_tokens": len(full_assistant_answer),
+                "total_tokens": total_tokens,
+                "latency_ms": 45.0,
+            })
+        except Exception as audit_err:
+            logger.warning(f"[RAGService] Normal completion audit logging warning: {audit_err}")
 
         # ======================================================================
         # 步骤 7: 完成帧 (done)

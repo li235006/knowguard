@@ -23,8 +23,17 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
-from app.models.base import BaseModel
-EvolutionBaseModel = BaseModel
+from app.core.database import Base
+
+
+class EvolutionBaseModel(Base):
+    """知识自进化与 FAQ 模型审计抽象基类"""
+    __abstract__ = True
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class FAQ(EvolutionBaseModel):
