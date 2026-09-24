@@ -331,6 +331,64 @@ if __name__ == "__main__":
             assert 99999 in c_data["restricted_chunk_ids"]
             print(f"[Self-Test] POST /guard/check-chunks verified: allowed={c_data['allowed_chunk_ids']}")
 
+            # 7. 测试不存在知识单元返回 404 (GET & PUT /units/99999/policy)
+            not_found_get = await client.get("/api/v1/guard/units/99999/policy")
+            assert not_found_get.status_code == 404
+            assert not_found_get.json()["code"] == 40401
+
+            not_found_put = await client.put("/api/v1/guard/units/99999/policy", json={"is_public": True})
+            assert not_found_put.status_code == 404
+            assert not_found_put.json()["code"] == 40401
+            print("[Self-Test] Non-existent unit_id 404 error handling verified")
+
+            # 8. 测试策略更新立即生效联动断言 (Dynamic Instant Policy Update Effect)
+            finance_token = create_access_token({
+                "sub": "201",
+                "user_id": 201,
+                "username": "fin_user",
+                "dept_id": 3,
+                "role_ids": [30],
+                "is_superuser": False,
+            })
+
+            # 8.1 初始阶段：u1 仅授权部门 2，财务员工 (dept_id=3) 访问必被拦截
+            chk1 = await client.post(
+                "/api/v1/guard/check-access",
+                json={"candidate_unit_ids": [u1_id]},
+                headers={"Authorization": f"Bearer {finance_token}"},
+            )
+            assert u1_id in chk1.json()["data"]["restricted_unit_ids"]
+
+            # 8.2 立即更新策略：PUT /units/{u1_id}/policy 授权部门 3
+            update_res = await client.put(
+                f"/api/v1/guard/units/{u1_id}/policy",
+                json={"is_public": False, "department_ids": [2, 3], "role_ids": [20]},
+            )
+            assert update_res.status_code == 200
+            assert 3 in update_res.json()["data"]["department_ids"]
+
+            # 8.3 即刻生效校验：无延时、无需重启，财务员工立即放行
+            chk2 = await client.post(
+                "/api/v1/guard/check-access",
+                json={"candidate_unit_ids": [u1_id]},
+                headers={"Authorization": f"Bearer {finance_token}"},
+            )
+            assert u1_id in chk2.json()["data"]["allowed_unit_ids"]
+            assert u1_id not in chk2.json()["data"]["restricted_unit_ids"]
+
+            # 8.4 即刻回收校验：PUT 撤销部门 3 授权
+            await client.put(
+                f"/api/v1/guard/units/{u1_id}/policy",
+                json={"is_public": False, "department_ids": [2], "role_ids": [20]},
+            )
+            chk3 = await client.post(
+                "/api/v1/guard/check-access",
+                json={"candidate_unit_ids": [u1_id]},
+                headers={"Authorization": f"Bearer {finance_token}"},
+            )
+            assert u1_id in chk3.json()["data"]["restricted_unit_ids"]
+            print("[Self-Test] Instant dynamic policy update and access revocation verified successfully!")
+
         test_app.dependency_overrides.clear()
         await test_engine.dispose()
         print("=== [Self-Test] All Guard Router tests PASSED successfully! ===")

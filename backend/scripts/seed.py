@@ -50,7 +50,8 @@ async def main():
         await engine.dispose()
     except Exception as e:
         print(f"[KnowGuard Seed] Remote MySQL database unavailable ({e}), using local SQLite test environment...")
-        local_engine = create_async_engine("sqlite+aiosqlite:///knowguard_seed.db", echo=False)
+        db_path = Path(__file__).resolve().parent.parent / "knowguard_seed.db"
+        local_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
         await seed(local_engine)
         await local_engine.dispose()
 

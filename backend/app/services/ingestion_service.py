@@ -72,6 +72,29 @@ class IngestionService:
             raise BusinessLogicError(message=f"PDF 文本提取失败: {str(e)}", code=40001)
 
     @staticmethod
+    def extract_text_from_docx(file_bytes: bytes) -> str:
+        """使用 python-docx 实现 Word (.docx) 纯文本与表格段落全量提取"""
+        try:
+            import docx
+            doc = docx.Document(io.BytesIO(file_bytes))
+            parts = []
+            # 1. 提取所有段落
+            for p in doc.paragraphs:
+                txt = p.text.strip()
+                if txt:
+                    parts.append(txt)
+            # 2. 提取所有表格行文本
+            for table in doc.tables:
+                for row in table.rows:
+                    row_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if row_cells:
+                        parts.append(" | ".join(row_cells))
+            return "\n\n".join(parts)
+        except Exception as e:
+            logger.error(f"[IngestionService] Word .docx extraction failed: {e}")
+            raise BusinessLogicError(message=f"Word (.docx) 文本提取失败: {str(e)}", code=40001)
+
+    @staticmethod
     def extract_text_from_txt_or_markdown(file_bytes: bytes) -> str:
         """使用原生 Python 实现 Markdown / TXT 纯文本提取"""
         for enc in ["utf-8", "utf-8-sig", "gb18030", "gbk"]:
@@ -92,6 +115,9 @@ class IngestionService:
         if suffix == ".pdf":
             text = cls.extract_text_from_pdf(file_bytes)
             file_type = "pdf"
+        elif suffix in [".docx", ".doc"]:
+            text = cls.extract_text_from_docx(file_bytes)
+            file_type = "docx"
         elif suffix in [".md", ".markdown"]:
             text = cls.extract_text_from_txt_or_markdown(file_bytes)
             file_type = "markdown"
@@ -100,7 +126,7 @@ class IngestionService:
             file_type = "txt"
         else:
             raise BusinessLogicError(
-                message=f"不支持的文件格式 '{suffix}'，系统仅支持 PDF (.pdf)、Markdown (.md) 与 TXT (.txt)",
+                message=f"不支持的文件格式 '{suffix}'，系统支持 Word (.docx)、PDF (.pdf)、Markdown (.md) 与 TXT (.txt)",
                 code=40001
             )
 
@@ -174,9 +200,12 @@ class IngestionService:
         return chunks
 
     async def extract_text(self, file_bytes: bytes, file_type: str = "txt") -> str:
-        """纯文本提取统一异步入口"""
-        if file_type.lower() == "pdf":
+        """纯文本提取统一异步入口，支持 PDF, Word (.docx), Markdown, TXT"""
+        ft = file_type.lower().lstrip(".")
+        if ft == "pdf":
             return self.extract_text_from_pdf(file_bytes)
+        elif ft in ["docx", "doc"]:
+            return self.extract_text_from_docx(file_bytes)
         return self.extract_text_from_txt_or_markdown(file_bytes)
 
     async def adaptive_chunking(self, text: str) -> List[Dict[str, Any]]:
@@ -491,6 +520,37 @@ if __name__ == "__main__":
             assert doc_txt.status == "INDEXED"
             print(f"[Self-Test] TXT document ingested: ID={doc_txt.id}, chunks={doc_txt.chunk_count}")
 
+            # 3.1 验证 Word (.docx) 段落与表格解析及切片向量建库
+            import docx
+            test_docx = docx.Document()
+            test_docx.add_heading("网络安全攻防演练实施总则", level=1)
+            test_docx.add_paragraph("本总则规定红蓝对抗期间全部实战网络靶标防护规范。")
+            tbl = test_docx.add_table(rows=2, cols=2)
+            tbl.rows[0].cells[0].text = "靶标级别"
+            tbl.rows[0].cells[1].text = "保护策略"
+            tbl.rows[1].cells[0].text = "核心生产库"
+            tbl.rows[1].cells[1].text = "4D-RBAC动态切片隔离"
+            docx_buf = io.BytesIO()
+            test_docx.save(docx_buf)
+            docx_bytes = docx_buf.getvalue()
+
+            extracted_docx_text = await service.extract_text(docx_bytes, file_type="docx")
+            assert "网络安全攻防演练实施总则" in extracted_docx_text
+            assert "4D-RBAC动态切片隔离" in extracted_docx_text
+
+            doc_docx = await service.ingest_file(
+                filename="cyber_security_rules.docx",
+                file_bytes=docx_bytes,
+                category="SECURITY"
+            )
+            assert doc_docx.id is not None
+            assert doc_docx.file_type == "docx"
+            assert doc_docx.status == "INDEXED"
+            docx_chunks = await service.get_document_chunks(doc_docx.id)
+            assert len(docx_chunks) == doc_docx.chunk_count
+            assert all(c.status == "indexed" for c in docx_chunks)
+            print(f"[Self-Test] Word (.docx) ingested: ID={doc_docx.id}, chunks={doc_docx.chunk_count}, status={doc_docx.status}")
+
             # 4. 验证 Milvus 中的向量数据
             milvus_chunks = service.milvus.get_chunks_by_document(doc_md.id)
             assert len(milvus_chunks) == doc_md.chunk_count
@@ -507,7 +567,7 @@ if __name__ == "__main__":
             # 6. 验证分页与条件查询 (list_documents)
             # 全量
             items, total = await service.list_documents(page=1, page_size=10)
-            assert total == 2
+            assert total == 3
             # 关键词过滤
             kw_items, kw_total = await service.list_documents(keyword="guidelines")
             assert kw_total == 1

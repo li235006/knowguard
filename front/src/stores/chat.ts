@@ -1,35 +1,49 @@
 /**
  * 员工智能问答工作台状态仓库 (Chat Store)
- * 模块: FE-M2 / P0-4
+ * 模块: FE-M2 / P1-3
+ * 职责: 会话生命周期管理、多轮历史消息加载、真实 SSE 鉴权问答流与连续追问
  */
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { ConversationItem, ChatMessage, CitationItem, WarningEventData } from '@/types/chat'
 import { connectSseStream } from '@/utils/sse'
-import { getConversationsApi, getSuggestionsApi, mockSendChatStream } from '@/api/chat'
+import {
+  getConversationsApi,
+  createConversationApi,
+  getConversationMessagesApi,
+  deleteConversationApi,
+  getSuggestionsApi,
+  mockSendChatStream
+} from '@/api/chat'
 
 export const useChatStore = defineStore('chat', () => {
   const conversations = ref<ConversationItem[]>([])
-  const activeConversationId = ref<string>('conv-01')
+  const activeConversationId = ref<string>('')
   const messages = ref<ChatMessage[]>([])
   const suggestions = ref<string[]>([])
   const isGenerating = ref<boolean>(false)
+  const isLoadingMessages = ref<boolean>(false)
   let activeAbortController: AbortController | null = null
 
-  // 初始化会话列表
+  // 1. 初始化拉取会话列表
   const fetchConversations = async () => {
     try {
       const res = await getConversationsApi()
-      if (res.data) {
+      if (res.data && res.data.length > 0) {
         conversations.value = res.data
+        if (!activeConversationId.value || !conversations.value.some((c) => c.id === activeConversationId.value)) {
+          await selectConversation(conversations.value[0].id)
+        }
+      } else {
+        await createNewConversation()
       }
-    } catch {
-      // 容错降级
+    } catch (err) {
+      console.error('拉取历史会话列表异常:', err)
     }
   }
 
-  // 初始化联想推荐
+  // 2. 初始化智能联想推荐提问
   const fetchSuggestions = async () => {
     try {
       const res = await getSuggestionsApi()
@@ -41,104 +55,103 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  // 切换会话
-  const selectConversation = (convId: string) => {
+  // 3. 切换激活会话并加载真实历史消息
+  const selectConversation = async (convId: string) => {
     if (isGenerating.value) {
       stopGenerating()
     }
     activeConversationId.value = convId
-
-    // 默认装载初始历史消息以还原 PAGE-02 原型效果
-    if (convId === 'conv-01' && messages.value.length === 0) {
-      messages.value = [
-        {
-          id: 'msg-01',
-          role: 'user',
-          content: '请问国内出差每天的住宿标准上限是多少？具体该怎么走报销流程？',
-          created_at: '14:20:15'
-        },
-        {
-          id: 'msg-02',
-          role: 'assistant',
-          content:
-            '您好！根据公司《2026年度企业差旅报销与补贴管理标准》的最新规定，现为您梳理关键报销要点：\n\n' +
-            '1. **住宿标准上限**：\n' +
-            '   - **一类城市**（北京、上海、广州、深圳）：国内出差住宿标准上限为 **600 元/天**；\n' +
-            '   - **二类城市**（各省会城市、新一线城市）：住宿标准上限为 **450 元/天**；\n' +
-            '   - **三类及其他城市**：标准上限为 **350 元/天**。\n\n' +
-            '2. **伙食与市内交通补助**：\n' +
-            '   - 伙食补助包干标准为 **120 元/天**（无须发票）；\n' +
-            '   - 市内公共交通补助标准为 **80 元/天**（据实报销或包干）。\n\n' +
-            '3. **报销流程与凭证规范**：\n' +
-            '   - 报销路径：通过 OA 办公系统 ➔ 财务审批中心 ➔ 提交《国内出差费用报销单》；\n' +
-            '   - 必须上传正规住宿增值税专用发票、交通客票（飞机行程单或高铁车票原件）。',
-          citations: [
-            {
-              chunk_id: 1024,
-              unit_id: 88,
-              unit_title: '2026年度企业差旅报销与补贴管理标准.pdf · 第 14 页',
-              snippet:
-                '国内出差住宿标准上限为一类城市 600 元/天，二类城市 450 元/天，伙食补助 120 元/天。员工需在出差结束后 15 个工作日内登录 OA 完成票据归档。',
-              score: 0.94
-            }
-          ],
-          created_at: '14:20:18',
-          status: 'done'
-        },
-        {
-          id: 'msg-03',
-          role: 'user',
-          content: '高管期权激励计划的分配细则是什么？',
-          created_at: '14:22:50'
-        },
-        {
-          id: 'msg-04',
-          role: 'assistant',
-          content:
-            '抱歉，在企业公开知识库中未检索到与“高管期权激励计划”相关的规章或政策文档。\n\n' +
-            '建议您确认问题描述是否准确，或向人力资源部门咨询相关制度指引。',
-          is_silent_fallback: true,
-          created_at: '14:23:07',
-          status: 'done'
-        }
-      ]
+    isLoadingMessages.value = true
+    try {
+      const res = await getConversationMessagesApi(convId)
+      if (res.data) {
+        messages.value = res.data
+      } else {
+        messages.value = []
+      }
+    } catch (err) {
+      console.error(`加载会话 [${convId}] 消息历史失败:`, err)
+      messages.value = []
+    } finally {
+      isLoadingMessages.value = false
     }
   }
 
-  // 新建会话
-  const createNewConversation = () => {
+  // 4. 创建全新会话
+  const createNewConversation = async (title?: string): Promise<ConversationItem | null> => {
     if (isGenerating.value) {
       stopGenerating()
     }
-    const newId = `conv-${Date.now()}`
-    const newConv: ConversationItem = {
-      id: newId,
-      title: '新建智能问答',
-      created_at: '刚刚',
-      message_count: 0
+    try {
+      const res = await createConversationApi({ title: title || '新建智能问答' })
+      if (res.data) {
+        conversations.value.unshift(res.data)
+        activeConversationId.value = res.data.id
+        messages.value = []
+        return res.data
+      }
+    } catch (err) {
+      console.error('新建会话异常:', err)
     }
-    conversations.value.unshift(newConv)
-    activeConversationId.value = newId
-    messages.value = []
+    return null
   }
 
-  // 发送消息并消费 SSE 流式事件
+  // 5. 删除指定会话及其消息
+  const deleteConversation = async (convId: string) => {
+    try {
+      await deleteConversationApi(convId)
+      conversations.value = conversations.value.filter((c) => c.id !== convId)
+
+      // 若被删除的正是当前激活会话，自动切换至首个会话或创建新会话
+      if (activeConversationId.value === convId) {
+        if (conversations.value.length > 0) {
+          await selectConversation(conversations.value[0].id)
+        } else {
+          await createNewConversation()
+        }
+      }
+    } catch (err) {
+      console.error(`删除会话 [${convId}] 失败:`, err)
+    }
+  }
+
+  // 6. 重命名会话标题
+  const renameConversation = (convId: string, newTitle: string) => {
+    const target = conversations.value.find((c) => c.id === convId)
+    if (target && newTitle.trim()) {
+      target.title = newTitle.trim()
+    }
+  }
+
+  // 7. 发送消息并连续追问
   const sendMessage = async (queryText: string) => {
-    if (!queryText.trim() || isGenerating.value) return
+    const text = queryText.trim()
+    if (!text || isGenerating.value) return
+
+    // 若无激活会话，首先创建
+    if (!activeConversationId.value) {
+      await createNewConversation()
+    }
 
     const now = new Date().toTimeString().slice(0, 8)
     const userMsgId = `user-${Date.now()}`
     const assistantMsgId = `asst-${Date.now()}`
 
-    // 1. 追加用户提问
+    // 1. 追加用户提问气泡
     messages.value.push({
       id: userMsgId,
       role: 'user',
-      content: queryText.trim(),
+      content: text,
       created_at: now
     })
 
-    // 2. 初始化 AI 空白消息气泡
+    // 2. 如果当前会话还是初始默认标题，根据用户首问智能归纳会话标题
+    const currentConv = conversations.value.find((c) => c.id === activeConversationId.value)
+    if (currentConv && (currentConv.title === '新建智能问答' || currentConv.title === '新建会话')) {
+      currentConv.title = text.length > 18 ? `${text.slice(0, 18)}...` : text
+    }
+
+    // 3. 初始化 AI 空白消息气泡
     const assistantMsg: ChatMessage = {
       id: assistantMsgId,
       role: 'assistant',
@@ -162,7 +175,7 @@ export const useChatStore = defineStore('chat', () => {
         assistantMsg.citations.push(citation)
       },
       onWarning: (warning: WarningEventData) => {
-        if (warning.type === 'permission_restricted') {
+        if (warning.type === 'permission_restricted' || warning.type === 'PERMISSION_ISOLATION') {
           assistantMsg.is_silent_fallback = true
         }
       },
@@ -170,6 +183,10 @@ export const useChatStore = defineStore('chat', () => {
         assistantMsg.status = 'done'
         isGenerating.value = false
         activeAbortController = null
+        if (currentConv) {
+          currentConv.message_count = messages.value.length
+          currentConv.updated_at = '刚刚'
+        }
       },
       onError: (err: Error) => {
         assistantMsg.status = 'error'
@@ -183,7 +200,7 @@ export const useChatStore = defineStore('chat', () => {
 
     const payload = {
       conversation_id: activeConversationId.value,
-      query: queryText.trim()
+      query: text
     }
 
     if (import.meta.env.VITE_ENABLE_MOCK === 'true') {
@@ -199,7 +216,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  // 停止生成
+  // 8. 停止生成
   const stopGenerating = () => {
     if (activeAbortController) {
       activeAbortController.abort()
@@ -218,10 +235,13 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     suggestions,
     isGenerating,
+    isLoadingMessages,
     fetchConversations,
     fetchSuggestions,
     selectConversation,
     createNewConversation,
+    deleteConversation,
+    renameConversation,
     sendMessage,
     stopGenerating
   }

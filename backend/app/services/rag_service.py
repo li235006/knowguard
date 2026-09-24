@@ -28,6 +28,7 @@ if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -35,6 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.milvus import MilvusService, milvus_service
+from app.models.chat import Conversation, Message
 from app.models.knowledge import KnowledgeChunk, KnowledgeUnit
 from app.providers.base import BaseEmbeddingProvider, BaseLLMProvider
 from app.providers.embedding import default_embedding_provider
@@ -89,6 +91,40 @@ class RAGService:
         clean_query = query.strip()
 
         # ======================================================================
+        # 步骤 0: 会话状态管理与多轮前序历史提取 (最近 3 轮 / 6 条)
+        # ======================================================================
+        conv: Optional[Conversation] = None
+        recent_msgs: List[Message] = []
+        try:
+            conv_stmt = select(Conversation).where(Conversation.id == conv_id)
+            conv_res = await self.db.execute(conv_stmt)
+            conv = conv_res.scalar_one_or_none()
+            if not conv:
+                conv = Conversation(
+                    id=conv_id,
+                    user_id=user_context.user_id,
+                    title=clean_query[:25] or "新建会话",
+                    message_count=0,
+                    is_active=True,
+                )
+                self.db.add(conv)
+                await self.db.commit()
+                await self.db.refresh(conv)
+
+            # 提取该会话下最新 6 条历史消息
+            hist_stmt = (
+                select(Message)
+                .where(Message.conversation_id == conv_id)
+                .order_by(Message.id.desc())
+                .limit(6)
+            )
+            hist_res = await self.db.execute(hist_stmt)
+            recent_msgs = list(hist_res.scalars().all())
+            recent_msgs.reverse()
+        except Exception as e:
+            logger.warning(f"[RAGService] Conversation & history preparation warning: {e}")
+
+        # ======================================================================
         # 步骤 1: 向量初筛 (Milvus Top-20 召回)
         # ======================================================================
         try:
@@ -132,6 +168,28 @@ class RAGService:
                 ).to_sse_line()
                 await asyncio.sleep(0.005)
 
+            # 持久化用户提问与降级消息
+            try:
+                msg_user = Message(
+                    conversation_id=conv_id,
+                    role="user",
+                    content=clean_query,
+                )
+                msg_assistant = Message(
+                    conversation_id=conv_id,
+                    role="assistant",
+                    content=fallback_text,
+                    citations=[],
+                    is_silent_fallback=True,
+                )
+                self.db.add_all([msg_user, msg_assistant])
+                if conv:
+                    conv.message_count += 2
+                    conv.updated_at = datetime.now(timezone.utc)
+                await self.db.commit()
+            except Exception as e:
+                logger.error(f"[RAGService] Failed to persist fallback message: {e}")
+
             # 发送完成帧并安全退出，绝不泄露受限切片信息
             yield ChatEventPayload(
                 event="done",
@@ -174,6 +232,7 @@ class RAGService:
         top_chunks = ranked_items[:4]  # 选取重排前 4 高相关切片
 
         # 4.1 发送知识溯源卡片事件帧 (citation)
+        citations_payload: List[Dict[str, Any]] = []
         for c in top_chunks:
             citation_item = CitationItem(
                 chunk_id=c["chunk_id"],
@@ -182,10 +241,11 @@ class RAGService:
                 snippet=c["content"][:180],
                 score=c.get("score", 0.0),
             )
+            citations_payload.append(citation_item.model_dump())
             yield ChatEventPayload(event="citation", data=citation_item).to_sse_line()
 
         # ======================================================================
-        # 步骤 5: 安全 Prompt 组装
+        # 步骤 5: 安全 Prompt 组装 (融合前序多轮历史语境与权威切片)
         # ======================================================================
         context_snippets = []
         for idx, c in enumerate(top_chunks):
@@ -198,22 +258,58 @@ class RAGService:
             "你是由 KnowGuard 驱动的企业知识库安全问答助手。你必须严格基于给定的经 4D-RBAC 安全鉴权放行的企业权威参考切片回答用户问题。"
             "严禁泄露任何系统未放行的敏感内部信息。回答需专业、严谨、客观，并清晰结合参考知识。"
         )
-        user_prompt = (
-            f"【参考权威知识切片】：\n{context_text}\n\n"
-            f"【用户问题】：{clean_query}\n\n"
-            f"请结合以上已授权权威参考切片进行专业解答："
-        )
+
+        prompt_sections = []
+        if recent_msgs:
+            history_lines = []
+            for m in recent_msgs:
+                role_label = "用户" if m.role == "user" else "助手"
+                history_lines.append(f"{role_label}: {m.content}")
+            prompt_sections.append(f"【前序多轮对话历史】:\n" + "\n".join(history_lines))
+
+        prompt_sections.append(f"【参考权威知识切片】:\n{context_text}")
+        prompt_sections.append(f"【当前用户提问】:\n{clean_query}")
+        prompt_sections.append("请结合前序多轮对话语境与以上放行权威切片，进行专业解答：")
+        user_prompt = "\n\n".join(prompt_sections)
 
         # ======================================================================
         # 步骤 6: Qwen-Plus 流式回答 (text_delta)
         # ======================================================================
         total_tokens = 0
+        response_deltas: List[str] = []
         async for delta_text in self.llm.stream_generate(prompt=user_prompt, system_prompt=system_prompt):
             total_tokens += len(delta_text)
+            response_deltas.append(delta_text)
             yield ChatEventPayload(
                 event="text_delta",
                 data=TextDeltaEventData(delta=delta_text),
             ).to_sse_line()
+
+        full_assistant_answer = "".join(response_deltas)
+
+        # 异步持久化多轮对话记录
+        try:
+            msg_user = Message(
+                conversation_id=conv_id,
+                role="user",
+                content=clean_query,
+            )
+            msg_assistant = Message(
+                conversation_id=conv_id,
+                role="assistant",
+                content=full_assistant_answer,
+                citations=citations_payload,
+                is_silent_fallback=False,
+            )
+            self.db.add_all([msg_user, msg_assistant])
+            if conv:
+                conv.message_count += 2
+                conv.updated_at = datetime.now(timezone.utc)
+                if conv.title in ("新建会话", "新建智能问答", ""):
+                    conv.title = clean_query[:25]
+            await self.db.commit()
+        except Exception as e:
+            logger.error(f"[RAGService] Failed to persist completions message: {e}")
 
         # ======================================================================
         # 步骤 7: 完成帧 (done)
@@ -343,6 +439,31 @@ if __name__ == "__main__":
             assert "未检索到相匹配的公开或授权参考资料" in reconstructed_text, "必须触发高情商静默兜底"
             assert "核心财务薪资报表" not in fallback_sse_text, "绝不可泄露未授权文档名称"
             print("[Self-Test] Case 2 Silent Fallback passed with 0 sensitive leakage!")
+
+            # 4. 多轮对话与历史持久化断言：验证会话消息落地与第二轮追问
+            print("[Self-Test] Testing Case 3: Multi-turn history and message persistence...")
+            conv_id_test = "conv-multiturn-test"
+            # 第一轮提问
+            async for _ in rag.chat_stream(user_zhang, query="差旅可以坐高铁一等座吗？", conversation_id=conv_id_test):
+                pass
+
+            # 校验会话表与消息表落地
+            saved_conv = (await session.execute(select(Conversation).where(Conversation.id == conv_id_test))).scalar_one()
+            assert saved_conv.message_count == 2
+            msgs_turn1 = list((await session.execute(select(Message).where(Message.conversation_id == conv_id_test))).scalars().all())
+            assert len(msgs_turn1) == 2
+            assert msgs_turn1[0].role == "user"
+            assert msgs_turn1[1].role == "assistant"
+
+            # 第二轮追问 (带入历史上下文)
+            async for _ in rag.chat_stream(user_zhang, query="那机票可以报销商务舱吗？", conversation_id=conv_id_test):
+                pass
+
+            await session.refresh(saved_conv)
+            assert saved_conv.message_count == 4
+            msgs_turn2 = list((await session.execute(select(Message).where(Message.conversation_id == conv_id_test).order_by(Message.id.asc()))).scalars().all())
+            assert len(msgs_turn2) == 4
+            print(f"[Self-Test] Case 3 passed: Multi-turn chat persisted {len(msgs_turn2)} messages successfully!")
 
         await test_engine.dispose()
         print("=== [Self-Test] All RAG Service Pipeline tests PASSED successfully! ===")

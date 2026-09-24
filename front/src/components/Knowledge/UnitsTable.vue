@@ -213,9 +213,10 @@
                 <button
                   type="button"
                   class="text-[11px] font-medium text-[#475569] hover:text-[#0071E3] transition-colors"
+                  title="配置四维数据权限策略 (4D-RBAC)"
                   @click="emit('edit-policy', unit)"
                 >
-                  权限
+                  权限设置
                 </button>
 
                 <!-- Delete Action Trigger -->

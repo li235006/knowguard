@@ -74,6 +74,44 @@ async def upload_document(
     )
 
 
+
+@router.post("/batch-upload", response_model=StandardResponse[List[KnowledgeUnitResponse]])
+async def batch_upload_documents(
+    files: List[UploadFile] = File(..., description="批量上传文件列表 (支持 DOCX, PDF, Markdown, TXT)"),
+    category: str = Form("DEFAULT", description="知识所属业务分类"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    多文件并发批量上传、滑动分块与向量入库:
+    - 支持 DOCX、PDF、Markdown 与 TXT
+    - 逐个事务化解析与切片向量入库
+    - 返回批量创建的知识单元响应列表
+    """
+    if not files:
+        raise BusinessLogicError(message="批量上传文件列表不能为空", code=40001)
+
+    service = IngestionService(db=db)
+    units = []
+    for f in files:
+        if not f.filename:
+            continue
+        content = await f.read()
+        if not content:
+            continue
+        doc = await service.ingest_file(
+            filename=f.filename,
+            file_bytes=content,
+            category=category,
+        )
+        units.append(KnowledgeUnitResponse.model_validate(doc))
+
+    return StandardResponse(
+        code=200,
+        message=f"成功批量上传并入库 {len(units)} 个文档",
+        data=units,
+    )
+
+
 @router.get("/documents/{doc_id}/chunks", response_model=StandardResponse[List[KnowledgeChunkResponse]])
 async def get_document_chunks(
     doc_id: int,
@@ -326,8 +364,41 @@ if __name__ == "__main__":
             assert get_del_res.status_code == 404
             print(f"[Self-Test] DELETE /units/{doc_id} verified, subsequent GET returns 404")
 
+            # 8. 测试批量并发上传 (POST /api/v1/knowledge/batch-upload，包含 Word .docx 与 TXT)
+            import io, docx
+            test_doc = docx.Document()
+            test_doc.add_heading("研发代码审查规范2026", level=1)
+            test_doc.add_paragraph("所有合入主干的代码必须经过严格的自动化测试与至少一名资深工程师评审。")
+            tbl = test_doc.add_table(rows=2, cols=2)
+            tbl.rows[0].cells[0].text = "阶段"
+            tbl.rows[0].cells[1].text = "准入条件"
+            tbl.rows[1].cells[0].text = "上线前"
+            tbl.rows[1].cells[1].text = "通过安全静态扫描与4D鉴权测试"
+            buf = io.BytesIO()
+            test_doc.save(buf)
+            sample_docx = buf.getvalue()
+
+            sample_txt = ("通用运维手册：禁止在生产环境直接调试数据库。" * 10).encode("utf-8")
+
+            batch_res = await client.post(
+                "/api/v1/knowledge/batch-upload",
+                files=[
+                    ("files", ("code_review_spec.docx", sample_docx, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+                    ("files", ("ops_handbook.txt", sample_txt, "text/plain")),
+                ],
+                data={"category": "DEV_OPS"},
+            )
+            assert batch_res.status_code == 200
+            batch_data = batch_res.json()["data"]
+            assert len(batch_data) == 2
+            assert any(item["title"] == "code_review_spec.docx" and item["file_type"] == "docx" for item in batch_data)
+            assert any(item["title"] == "ops_handbook.txt" and item["file_type"] == "txt" for item in batch_data)
+            assert all(item["status"] == "INDEXED" for item in batch_data)
+            print(f"[Self-Test] POST /batch-upload verified: {len(batch_data)} assets ingested concurrently")
+
         test_app.dependency_overrides.clear()
         await test_engine.dispose()
         print("=== [Self-Test] All Knowledge Router tests PASSED successfully! ===")
 
     asyncio.run(_test_knowledge_router())
+

@@ -23,15 +23,24 @@ backend_dir = Path(__file__).resolve().parent.parent.parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from typing import List, Optional
+import uuid
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.guard import get_optional_user
 from app.core.database import get_db
+from app.core.exceptions import EntityNotFoundError
+from app.models.chat import Conversation, Message
 from app.schemas.auth import UserContext
-from app.schemas.chat import ChatCompletionRequest
+from app.schemas.chat import (
+    ChatCompletionRequest,
+    ConversationCreateRequest,
+    ConversationResponse,
+    MessageResponse,
+)
 from app.schemas.common import StandardResponse
 from app.services.rag_service import RAGService
 
@@ -102,6 +111,155 @@ async def get_suggestions():
     )
 
 
+# ------------------------------------------------------------------------------
+# 多轮会话与历史消息管理 (P1-3 标准路由契约，基于数据库持久化与用户级隔离)
+# ------------------------------------------------------------------------------
+@router.get("/conversations", response_model=StandardResponse[List[ConversationResponse]])
+async def get_conversations(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取当前用户的历史会话列表 (支持多租户/用户数据物理隔离)"""
+    user_ctx = await get_optional_user(request)
+    user_id = user_ctx.user_id if user_ctx else 0
+
+    stmt = (
+        select(Conversation)
+        .where(Conversation.user_id == user_id, Conversation.is_active == True)
+        .order_by(Conversation.updated_at.desc())
+    )
+    res = await db.execute(stmt)
+    convs = res.scalars().all()
+
+    data = [
+        ConversationResponse(
+            id=c.id,
+            title=c.title,
+            created_at=c.created_at.strftime("%Y-%m-%d %H:%M:%S") if c.created_at else "刚刚",
+            updated_at=c.updated_at.strftime("%Y-%m-%d %H:%M:%S") if c.updated_at else "刚刚",
+            message_count=c.message_count or 0,
+        )
+        for c in convs
+    ]
+    return StandardResponse(
+        code=200,
+        message="获取会话列表成功",
+        data=data,
+    )
+
+
+@router.post("/conversations", response_model=StandardResponse[ConversationResponse])
+async def create_conversation(
+    payload: Optional[ConversationCreateRequest] = None,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """创建全新问答会话"""
+    user_ctx = await get_optional_user(request) if request else None
+    user_id = user_ctx.user_id if user_ctx else 0
+
+    conv_id = f"conv-{uuid.uuid4().hex[:12]}"
+    title = payload.title if payload and payload.title else "新建智能问答"
+    new_conv = Conversation(
+        id=conv_id,
+        user_id=user_id,
+        title=title,
+        message_count=0,
+        is_active=True,
+    )
+    db.add(new_conv)
+    await db.commit()
+    await db.refresh(new_conv)
+
+    return StandardResponse(
+        code=200,
+        message="新建会话成功",
+        data=ConversationResponse(
+            id=new_conv.id,
+            title=new_conv.title,
+            created_at=new_conv.created_at.strftime("%Y-%m-%d %H:%M:%S") if new_conv.created_at else "刚刚",
+            updated_at=new_conv.updated_at.strftime("%Y-%m-%d %H:%M:%S") if new_conv.updated_at else "刚刚",
+            message_count=new_conv.message_count or 0,
+        ),
+    )
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=StandardResponse[List[MessageResponse]])
+async def get_conversation_messages(
+    conversation_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取指定会话的历史消息 (严格用户隔离)"""
+    user_ctx = await get_optional_user(request)
+    user_id = user_ctx.user_id if user_ctx else 0
+
+    conv_stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.user_id == user_id,
+        Conversation.is_active == True,
+    )
+    conv_res = await db.execute(conv_stmt)
+    conv = conv_res.scalar_one_or_none()
+    if not conv:
+        raise EntityNotFoundError(message=f"会话 ID={conversation_id} 不存在或无权访问", code=40401)
+
+    msg_stmt = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.id.asc())
+    )
+    msgs = (await db.execute(msg_stmt)).scalars().all()
+    res = [
+        MessageResponse(
+            id=str(m.id),
+            conversation_id=m.conversation_id,
+            role=m.role,
+            content=m.content,
+            citations=m.citations or [],
+            is_silent_fallback=m.is_silent_fallback,
+            created_at=m.created_at.strftime("%Y-%m-%d %H:%M:%S") if m.created_at else "",
+            status=m.status,
+        )
+        for m in msgs
+    ]
+    return StandardResponse(
+        code=200,
+        message="获取会话历史消息成功",
+        data=res,
+    )
+
+
+@router.delete("/conversations/{conversation_id}", response_model=StandardResponse[dict])
+async def delete_conversation(
+    conversation_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """软删除指定会话 (严格用户隔离与 is_active=False 标记)"""
+    user_ctx = await get_optional_user(request)
+    user_id = user_ctx.user_id if user_ctx else 0
+
+    conv_stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.user_id == user_id,
+        Conversation.is_active == True,
+    )
+    conv_res = await db.execute(conv_stmt)
+    conv = conv_res.scalar_one_or_none()
+    if not conv:
+        raise EntityNotFoundError(message=f"会话 ID={conversation_id} 不存在或无权删除", code=40401)
+
+    conv.is_active = False
+    await db.commit()
+
+    return StandardResponse(
+        code=200,
+        message="会话删除成功",
+        data={"deleted_id": conversation_id},
+    )
+
+
 # ==============================================================================
 # 底嵌自测闭环脚本 (Self-Test Execution Block)
 # ==============================================================================
@@ -161,8 +319,8 @@ if __name__ == "__main__":
                 guard = GuardService(db=session)
                 await guard.update_unit_policy(doc.id, PermissionPolicyConfig(is_public=True))
 
-            # 2. 构造测试用户 Token
-            token = create_access_token({
+            # 2. 构造测试用户 Token (张三 & 李四)
+            token_zs = create_access_token({
                 "sub": "10086",
                 "user_id": 10086,
                 "employee_id": "10086",
@@ -172,13 +330,33 @@ if __name__ == "__main__":
                 "role_ids": [3],
                 "is_superuser": False,
             })
+            token_ls = create_access_token({
+                "sub": "10087",
+                "user_id": 10087,
+                "employee_id": "10087",
+                "username": "lisi",
+                "real_name": "李四",
+                "dept_id": 3,
+                "role_ids": [2],
+                "is_superuser": False,
+            })
 
-            # 3. 测试 POST /api/v1/chat/completions 原生 SSE 响应
-            post_payload = {"query": "出差住宿报销标准是多少？", "conversation_id": "conv-test-001"}
+            # 3. 测试 POST /api/v1/chat/conversations
+            create_res = await client.post(
+                "/api/v1/chat/conversations",
+                json={"title": "张三的差旅咨询"},
+                headers={"Authorization": f"Bearer {token_zs}"},
+            )
+            assert create_res.status_code == 200
+            zs_conv_id = create_res.json()["data"]["id"]
+            print(f"[Self-Test] POST /conversations created: {zs_conv_id}")
+
+            # 4. 测试 POST /api/v1/chat/completions 原生 SSE 响应并自动落库
+            post_payload = {"query": "出差住宿报销标准是多少？", "conversation_id": zs_conv_id}
             res = await client.post(
                 "/api/v1/chat/completions",
                 json=post_payload,
-                headers={"Authorization": f"Bearer {token}", "Accept": "text/event-stream"},
+                headers={"Authorization": f"Bearer {token_zs}", "Accept": "text/event-stream"},
             )
             assert res.status_code == 200
             assert "text/event-stream" in res.headers.get("Content-Type", "")
@@ -189,7 +367,43 @@ if __name__ == "__main__":
             assert "出差管理守则.pdf" in sse_content
             print("[Self-Test] POST /api/v1/chat/completions SSE stream verified successfully")
 
-            # 4. 测试 GET /api/v1/chat/suggestions
+            # 5. 测试 GET /api/v1/chat/conversations/{id}/messages 校验落库与用户隔离
+            msg_res = await client.get(
+                f"/api/v1/chat/conversations/{zs_conv_id}/messages",
+                headers={"Authorization": f"Bearer {token_zs}"},
+            )
+            assert msg_res.status_code == 200
+            msgs = msg_res.json()["data"]
+            assert len(msgs) == 2, f"应该落库 2 条消息，实际: {len(msgs)}"
+            assert msgs[0]["role"] == "user"
+            assert msgs[1]["role"] == "assistant"
+            print(f"[Self-Test] GET /conversations/{{id}}/messages verified: {len(msgs)} messages persisted")
+
+            # 6. 验证跨用户数据隔离: 李四访问张三会话返回 404
+            ls_get = await client.get(
+                f"/api/v1/chat/conversations/{zs_conv_id}/messages",
+                headers={"Authorization": f"Bearer {token_ls}"},
+            )
+            assert ls_get.status_code == 404
+            assert ls_get.json()["code"] == 40401
+            print("[Self-Test] Cross-user isolation verified: Lisi cannot access Zhangsan's conversation (404)")
+
+            # 7. 测试 DELETE /api/v1/chat/conversations/{id} 软删除
+            del_res = await client.delete(
+                f"/api/v1/chat/conversations/{zs_conv_id}",
+                headers={"Authorization": f"Bearer {token_zs}"},
+            )
+            assert del_res.status_code == 200
+            assert del_res.json()["data"]["deleted_id"] == zs_conv_id
+
+            check_del = await client.get(
+                f"/api/v1/chat/conversations/{zs_conv_id}/messages",
+                headers={"Authorization": f"Bearer {token_zs}"},
+            )
+            assert check_del.status_code == 404
+            print("[Self-Test] DELETE /conversations/{id} soft-delete verified successfully")
+
+            # 8. 测试 GET /api/v1/chat/suggestions
             sug_res = await client.get("/api/v1/chat/suggestions")
             assert sug_res.status_code == 200
             assert len(sug_res.json()["data"]) >= 3
@@ -200,3 +414,4 @@ if __name__ == "__main__":
         print("=== [Self-Test] All Chat Router tests PASSED successfully! ===")
 
     asyncio.run(_test_chat_router())
+

@@ -11,6 +11,10 @@ export interface ConversationItem {
   message_count?: number
 }
 
+export interface CreateConversationPayload {
+  title?: string
+}
+
 export interface ChatRequest {
   conversation_id?: string
   query: string

@@ -9,6 +9,7 @@ import type { KnowledgeUnit } from '@/types/knowledge'
 import {
   getKnowledgeUnitsApi,
   uploadDocumentApi,
+  batchUploadDocumentsApi,
   updateUnitStatusApi,
   deleteKnowledgeUnitApi
 } from '@/api/knowledge'
@@ -68,6 +69,20 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     const res = await uploadDocumentApi(file, category)
     if (!res.data) {
       throw new Error(res.message || '上传失败')
+    }
+    // 上传成功后自动刷新表格列表
+    await fetchUnits()
+    return res.data
+  }
+
+  // 2.1 批量上传多文档联动刷新
+  const batchUploadDocuments = async (
+    files: File[],
+    category: string = 'DEFAULT'
+  ): Promise<KnowledgeUnit[]> => {
+    const res = await batchUploadDocumentsApi(files, category)
+    if (!res.data) {
+      throw new Error(res.message || '批量上传失败')
     }
     // 上传成功后自动刷新表格列表
     await fetchUnits()
@@ -145,6 +160,7 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     metrics,
     fetchUnits,
     uploadDocument,
+    batchUploadDocuments,
     toggleStatus,
     deleteUnit,
     setFilter,

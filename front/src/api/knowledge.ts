@@ -208,6 +208,52 @@ export const uploadDocumentApi = async (
   })
 }
 
+// 2.1 批量上传知识文档 (POST /api/v1/knowledge/batch-upload)
+export const batchUploadDocumentsApi = async (
+  files: File[],
+  category: string = 'DEFAULT'
+): Promise<ApiResponse<KnowledgeUnit[]>> => {
+  if (isMockEnabled()) {
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    const createdUnits: KnowledgeUnit[] = []
+    for (const file of files) {
+      const ext = file.name.split('.').pop()?.toUpperCase() || 'TXT'
+      const newUnit: KnowledgeUnit = {
+        id: 1000 + liveMockUnits.length + 1,
+        title: file.name,
+        file_type: ext,
+        file_size: file.size,
+        category,
+        status: 'INDEXED',
+        chunk_count: Math.max(1, Math.ceil(file.size / 51200)),
+        permission_summary: '全员公开',
+        created_at: new Date().toISOString().replace('T', ' ').substring(0, 19)
+      }
+      liveMockUnits.unshift(newUnit)
+      createdUnits.push(newUnit)
+    }
+
+    return {
+      code: 200,
+      message: `成功批量上传并入库 ${createdUnits.length} 个文档`,
+      data: createdUnits,
+      trace_id: generateTraceId()
+    }
+  }
+
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append('files', file)
+  }
+  formData.append('category', category)
+
+  return request.post('/api/v1/knowledge/batch-upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
+  })
+}
+
 // 3. 启停用知识单元 (PATCH /status)
 export const updateUnitStatusApi = async (
   unitId: number,
@@ -284,44 +330,88 @@ export const getUnitChunksApi = async (unitId: number): Promise<ApiResponse<Chun
   return request.get(`/api/v1/knowledge/units/${unitId}/chunks`)
 }
 
-// 6. 获取与更新 4D 权限策略
+// 内存中维护可变的 Mock 4D 权限策略数据
+const mockPolicyStorage = new Map<number, PermissionPolicyConfig>()
+
+// 6. 获取与更新 4D 权限策略 (Leader 标准路由 /api/v1/guard/units/{id}/policy)
 export const getUnitPolicyApi = async (unitId: number): Promise<ApiResponse<PermissionPolicyConfig>> => {
   if (isMockEnabled()) {
     await new Promise((resolve) => setTimeout(resolve, 100))
+    const existing = mockPolicyStorage.get(unitId)
+    if (existing) {
+      return {
+        code: 200,
+        message: '获取4D权限策略成功',
+        data: { ...existing },
+        trace_id: generateTraceId()
+      }
+    }
+
+    const isGlobal = unitId !== 1003 && unitId !== 1005
+    const initialPolicy: PermissionPolicyConfig = {
+      unit_id: unitId,
+      is_global: isGlobal,
+      is_public: isGlobal,
+      department_ids: isGlobal ? [] : [2, 3],
+      role_ids: isGlobal ? [] : [1, 2],
+      user_ids: isGlobal ? [] : [1],
+      updated_at: new Date().toISOString()
+    }
+    mockPolicyStorage.set(unitId, initialPolicy)
+
     return {
       code: 200,
-      message: 'success',
-      data: {
-        unit_id: unitId,
-        is_global: unitId !== 1003 && unitId !== 1005,
-        department_ids: [2, 3],
-        role_ids: [1, 2],
-        user_ids: []
-      },
+      message: '获取4D权限策略成功',
+      data: initialPolicy,
       trace_id: generateTraceId()
     }
   }
 
-  return request.get(`/api/v1/guard/policies/${unitId}`)
+  return request.get(`/api/v1/guard/units/${unitId}/policy`)
 }
 
 export const updateUnitPolicyApi = async (
   unitId: number,
   data: PermissionPolicyConfig
-): Promise<ApiResponse<boolean>> => {
+): Promise<ApiResponse<PermissionPolicyConfig>> => {
   if (isMockEnabled()) {
     await new Promise((resolve) => setTimeout(resolve, 150))
+    const isGlobal = Boolean(data.is_global || data.is_public)
+    const savedPolicy: PermissionPolicyConfig = {
+      ...data,
+      unit_id: unitId,
+      is_global: isGlobal,
+      is_public: isGlobal,
+      updated_at: new Date().toISOString()
+    }
+    mockPolicyStorage.set(unitId, savedPolicy)
+
     const target = liveMockUnits.find((u) => u.id === unitId)
     if (target) {
-      target.permission_summary = data.is_global ? '全员公开' : '指定部门/角色授权'
+      if (isGlobal) {
+        target.permission_summary = '全员公开'
+      } else {
+        const parts: string[] = []
+        if (data.department_ids && data.department_ids.length > 0) {
+          parts.push(`部门(${data.department_ids.length})`)
+        }
+        if (data.role_ids && data.role_ids.length > 0) {
+          parts.push(`角色(${data.role_ids.length})`)
+        }
+        if (data.user_ids && data.user_ids.length > 0) {
+          parts.push(`特权员工(${data.user_ids.length})`)
+        }
+        target.permission_summary = parts.length > 0 ? parts.join(' / ') : '受限私有 (无授权)'
+      }
     }
+
     return {
       code: 200,
-      message: '4D-RBAC 权限策略已实时更新并同步 Redis 缓存',
-      data: true,
+      message: '4D权限策略更新成功',
+      data: savedPolicy,
       trace_id: generateTraceId()
     }
   }
 
-  return request.put(`/api/v1/guard/policies/${unitId}`, data)
+  return request.put(`/api/v1/guard/units/${unitId}/policy`, data)
 }

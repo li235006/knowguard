@@ -35,7 +35,20 @@ export interface ChunkItem {
 export interface PermissionPolicyConfig {
   unit_id: number
   is_global: boolean
+  is_public?: boolean
   department_ids: number[]
   role_ids: number[]
   user_ids: number[]
+  updated_at?: string | null
+}
+
+export interface BatchUploadItem {
+  id: string
+  file: File
+  name: string
+  size: number
+  file_type: string
+  status: 'pending' | 'uploading' | 'indexed' | 'failed'
+  progress: number
+  error_message?: string
 }

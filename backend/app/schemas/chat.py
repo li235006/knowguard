@@ -32,6 +32,32 @@ class ChatCompletionRequest(BaseModel):
     model: Optional[str] = Field("qwen-plus", description="偏好模型名称")
 
 
+class ConversationCreateRequest(BaseModel):
+    """新建会话请求"""
+    title: Optional[str] = Field("新建智能问答", description="会话标题")
+
+
+class ConversationResponse(BaseModel):
+    """会话摘要响应模型"""
+    id: str = Field(..., description="会话唯一标识")
+    title: str = Field(..., description="会话标题")
+    created_at: str = Field(..., description="创建时间")
+    updated_at: Optional[str] = Field(None, description="更新时间")
+    message_count: Optional[int] = Field(0, description="消息总数")
+
+
+class MessageResponse(BaseModel):
+    """问答单条消息响应模型"""
+    id: str = Field(..., description="消息唯一标识")
+    conversation_id: str = Field(..., description="会话标识")
+    role: str = Field(..., description="角色: user | assistant")
+    content: str = Field(..., description="消息正文")
+    citations: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="溯源引用")
+    is_silent_fallback: Optional[bool] = Field(False, description="是否静默降级")
+    created_at: str = Field(..., description="时间戳")
+    status: Optional[str] = Field("done", description="状态: streaming | done | error")
+
+
 class CitationItem(BaseModel):
     """知识溯源引用卡片数据模型"""
     chunk_id: int = Field(..., description="切片 ID")
