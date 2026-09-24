@@ -70,6 +70,7 @@ class CitationItem(BaseModel):
 class TextDeltaEventData(BaseModel):
     """文本增量事件数据"""
     delta: str = Field(..., description="打字机增量字符片段")
+    is_faq: Optional[bool] = Field(default=False, description="是否来自 FAQ 极速直出")
 
 
 class WarningEventData(BaseModel):
@@ -83,6 +84,10 @@ class DoneEventData(BaseModel):
     conversation_id: str = Field(..., description="会话 ID")
     trace_id: str = Field(..., description="链路追踪 ID")
     total_tokens: Optional[int] = Field(0, description="消耗 Token 预估")
+    is_silent_fallback: Optional[bool] = Field(default=False, description="是否静默降级")
+    is_faq_hit: Optional[bool] = Field(default=False, description="是否命中标准 FAQ 极速缓存直出")
+    hit_faq: Optional[bool] = Field(default=False, description="是否命中标准 FAQ 极速缓存直出 (别名)")
+    faq_id: Optional[int] = Field(default=None, description="命中的 FAQ ID")
 
 
 class ChatEventPayload(BaseModel):

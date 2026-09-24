@@ -29,6 +29,7 @@ if str(backend_dir) not in sys.path:
 
 import asyncio
 from datetime import datetime, timezone
+import json
 import logging
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -123,6 +124,43 @@ class RAGService:
             recent_msgs.reverse()
         except Exception as e:
             logger.warning(f"[RAGService] Conversation & history preparation warning: {e}")
+
+        # ======================================================================
+        # 步骤 0.5: 前置极速 FAQ 缓存直出检索 (<30ms, 跳过 Milvus 初筛与 LLM)
+        # ======================================================================
+        try:
+            from app.services.evolution_service import EvolutionService
+            evolution_svc = EvolutionService(db=self.db, embedding_provider=self.embedding_provider)
+            faq_hit = await evolution_svc.match_faq_cache(clean_query, threshold=0.92)
+            if faq_hit:
+                faq_answer = faq_hit["standard_answer"]
+                yield f"event: text_delta\ndata: {json.dumps({'text': faq_answer, 'delta': faq_answer, 'is_faq': True}, ensure_ascii=False)}\n\n"
+                yield f"event: done\ndata: {json.dumps({'conversation_id': conv_id, 'trace_id': tr_id, 'hit_faq': True, 'is_faq_hit': True, 'faq_id': faq_hit['faq_id']}, ensure_ascii=False)}\n\n"
+
+                try:
+                    user_msg = Message(
+                        conversation_id=conv_id,
+                        role="user",
+                        content=clean_query,
+                        trace_id=tr_id,
+                    )
+                    ai_msg = Message(
+                        conversation_id=conv_id,
+                        role="assistant",
+                        content=faq_answer,
+                        trace_id=tr_id,
+                        is_guard_intercepted=False,
+                    )
+                    self.db.add(user_msg)
+                    self.db.add(ai_msg)
+                    if conv:
+                        conv.message_count += 2
+                    await self.db.commit()
+                except Exception as msg_err:
+                    logger.warning(f"[RAGService] FAQ message persistence warning: {msg_err}")
+                return
+        except Exception as e:
+            logger.warning(f"[RAGService] Fast FAQ cache check warning: {e}")
 
         # ======================================================================
         # 步骤 1: 向量初筛 (Milvus Top-20 召回)

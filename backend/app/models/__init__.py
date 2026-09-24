@@ -6,6 +6,7 @@ SQLAlchemy 2.0 ORM 持久化实体模型定义包
 
 from app.models.base import BaseModel
 from app.models.chat import Conversation, Message, ChatMessage
+from app.models.evolution import FAQ, FAQCandidate, FAQItem, KnowledgeGap
 from app.models.knowledge import KnowledgeChunk, KnowledgeUnit
 from app.models.policy import PermissionPolicy
 from app.models.user import Department, Role, User, UserRole
@@ -22,4 +23,9 @@ __all__ = [
     "Conversation",
     "Message",
     "ChatMessage",
+    "FAQ",
+    "FAQItem",
+    "FAQCandidate",
+    "KnowledgeGap",
 ]
+

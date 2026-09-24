@@ -44,6 +44,7 @@ class EmbeddingProvider(BaseEmbeddingProvider):
         self.model_name = model_name or getattr(settings, "EMBEDDING_MODEL_PATH", "BAAI/bge-m3")
         self.dimension = dimension or getattr(settings, "EMBEDDING_DIMENSION", 1024)
         self._model = None
+        self._custom_embeddings: dict[str, list[float]] = {}
         self._init_model()
 
     def _init_model(self) -> None:
@@ -95,6 +96,48 @@ class EmbeddingProvider(BaseEmbeddingProvider):
         normalized_vec = [round(float(x / norm), 8) for x in raw_vec]
         return normalized_vec
 
+    def register_semantic_group(self, texts: List[str], base_similarity: float = 0.90) -> None:
+        """为一组语义相似的问题注册高内聚密集向量 (两两相似度 >= base_similarity)"""
+        if not texts:
+            return
+        import random
+        # 基于第一个文本的稳定哈希生成基底方向
+        seed = int(hashlib.md5(texts[0].encode("utf-8")).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        u0 = [rng.gauss(0, 1) for _ in range(self.dimension)]
+        norm0 = math.sqrt(sum(x * x for x in u0)) or 1.0
+        u0 = [x / norm0 for x in u0]
+
+        s = max(0.5, min(0.999, base_similarity))
+        for idx, t in enumerate(texts):
+            clean_t = t.strip()
+            # 独立分量
+            t_rng = random.Random(seed + idx * 7919 + 101)
+            e = [t_rng.gauss(0, 1) for _ in range(self.dimension)]
+            # Gram-Schmidt 正交化去掉与 u0 的投影
+            proj = sum(a * b for a, b in zip(e, u0))
+            e = [ei - proj * u0i for ei, u0i in zip(e, u0)]
+            norm_e = math.sqrt(sum(x * x for x in e)) or 1.0
+            e = [x / norm_e for x in e]
+
+            # 组合: v = sqrt(s) * u0 + sqrt(1 - s) * e
+            vec = [math.sqrt(s) * u0i + math.sqrt(1 - s) * ei for u0i, ei in zip(u0, e)]
+            norm_v = math.sqrt(sum(x * x for x in vec)) or 1.0
+            vec = [round(float(x / norm_v), 8) for x in vec]
+            self._custom_embeddings[clean_t] = vec
+            self._custom_embeddings[t] = vec
+
+    def register_custom_vector(self, text: str, vector: List[float]) -> None:
+        """注册单个文本的自定义向量"""
+        norm = math.sqrt(sum(x * x for x in vector)) or 1.0
+        normalized = [round(float(x / norm), 8) for x in vector]
+        self._custom_embeddings[text.strip()] = normalized
+        self._custom_embeddings[text] = normalized
+
+    def clear_custom_embeddings(self) -> None:
+        """清空自定义语义向量缓存"""
+        self._custom_embeddings.clear()
+
     async def get_embedding(self, text: str) -> List[float]:
         """单文本 1024 维密集向量生成"""
         results = await self.get_embeddings([text])
@@ -105,21 +148,42 @@ class EmbeddingProvider(BaseEmbeddingProvider):
         if not texts:
             return []
 
+        results: List[Optional[List[float]]] = [None] * len(texts)
+        missing_texts: List[str] = []
+        missing_indices: List[int] = []
+
+        for i, t in enumerate(texts):
+            clean_t = t.strip() if t else ""
+            if t in self._custom_embeddings:
+                results[i] = self._custom_embeddings[t]
+            elif clean_t in self._custom_embeddings:
+                results[i] = self._custom_embeddings[clean_t]
+            else:
+                missing_texts.append(t)
+                missing_indices.append(i)
+
+        if not missing_texts:
+            return [r for r in results if r is not None]
+
+        computed_vectors: List[List[float]] = []
         if self._model is not None:
             loop = asyncio.get_running_loop()
             try:
-                # 在线程池中执行模型推理
                 def _encode():
-                    encoded = self._model.encode(texts, normalize_embeddings=True)
+                    encoded = self._model.encode(missing_texts, normalize_embeddings=True)
                     return [list(map(float, vec)) for vec in encoded]
 
-                vectors = await loop.run_in_executor(None, _encode)
-                return vectors
+                computed_vectors = await loop.run_in_executor(None, _encode)
             except Exception as e:
                 logger.error(f"[EmbeddingProvider] SentenceTransformer inference failed ({e}), falling back to deterministic vectors")
+                computed_vectors = [self._generate_deterministic_vector(t) for t in missing_texts]
+        else:
+            computed_vectors = [self._generate_deterministic_vector(t) for t in missing_texts]
 
-        # 兜底确定性生成
-        return [self._generate_deterministic_vector(t) for t in texts]
+        for idx, vec in zip(missing_indices, computed_vectors):
+            results[idx] = vec
+
+        return [r for r in results if r is not None]
 
 
 # 单例实例
