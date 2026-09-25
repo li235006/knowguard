@@ -61,9 +61,28 @@ const initChart = () => {
   const trends: any[] = analyticsStore.tokenTrends.length > 0 ? analyticsStore.tokenTrends : defaultEmptyTrends
 
   const xData = trends.map((t: any) => t.time || (t.date ? t.date.substring(5) : '00:00'))
-  const promptData = trends.map((t: any) => Math.round((t.prompt_tokens || 0) / 1000))
-  const compData = trends.map((t: any) => Math.round((t.completion_tokens || 0) / 1000))
-  const qpsData = trends.map((t: any) => t.qps ?? (t.pv ? Math.round(t.pv / 60) : 0))
+
+  const maxToken = Math.max(
+    ...trends.map((t: any) => (t.prompt_tokens || 0) + (t.completion_tokens || 0)),
+    0
+  )
+  const isKUnit = maxToken >= 2000
+
+  const promptData = trends.map((t: any) =>
+    isKUnit
+      ? Number(((t.prompt_tokens || 0) / 1000).toFixed(2))
+      : (t.prompt_tokens || 0)
+  )
+  const compData = trends.map((t: any) =>
+    isKUnit
+      ? Number(((t.completion_tokens || 0) / 1000).toFixed(2))
+      : (t.completion_tokens || 0)
+  )
+  const qpsData = trends.map((t: any) => {
+    if (typeof t.qps === 'number' && t.qps > 0) return t.qps
+    if (t.pv) return t.pv
+    return 0
+  })
 
   const option: echarts.EChartsOption = {
     tooltip: {
@@ -79,7 +98,7 @@ const initChart = () => {
         if (!Array.isArray(params)) return ''
         let res = `<div class="font-semibold text-xs mb-1">${params[0].axisValue}</div>`
         params.forEach((item: any) => {
-          const unit = item.seriesName === '峰值 QPS' ? '次/秒' : 'k Tokens'
+          const unit = item.seriesName === '峰值 QPS' ? '次/秒' : (isKUnit ? 'k Tokens' : 'Tokens')
           res += `<div class="flex items-center justify-between gap-4 text-[11px] leading-5">
             <span style="color:${item.color}">${item.seriesName}:</span>
             <span class="font-mono font-medium">${item.value} ${unit}</span>
@@ -104,7 +123,7 @@ const initChart = () => {
     yAxis: [
       {
         type: 'value',
-        name: '(k)',
+        name: isKUnit ? '(k)' : 'Tokens',
         nameTextStyle: { color: '#94A3B8', fontSize: 10 },
         splitLine: { lineStyle: { color: '#F1F5F9', type: 'dashed' } },
         axisLabel: { color: '#64748B', fontSize: 10 }

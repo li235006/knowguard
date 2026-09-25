@@ -57,7 +57,7 @@ async def get_evolution_metrics(
     db: AsyncSession = Depends(get_db),
 ):
     """获取知识自进化核心度量统计指标 (对齐前端 PAGE-06)"""
-    from app.models.evolution import FAQCandidate, KnowledgeGap, StandardFAQ
+    from app.models.evolution import FAQCandidate, KnowledgeGap, FAQ
 
     # 1. 统计未闭环知识缺口数
     gap_count_res = await db.execute(
@@ -72,7 +72,7 @@ async def get_evolution_metrics(
     pending_candidates = candidate_count_res.scalar() or 0
 
     # 3. 统计已发布 FAQ 总数
-    faq_count_res = await db.execute(select(func.count(StandardFAQ.id)))
+    faq_count_res = await db.execute(select(func.count(FAQ.id)).where(FAQ.is_deleted == False))
     faq_count = faq_count_res.scalar() or 0
 
     accuracy_str = "94.2%" if (pending_candidates > 0 or faq_count > 0) else "0.0%"
@@ -434,6 +434,25 @@ async def convert_knowledge_gap(
     return StandardResponse(
         code=200,
         message="知识缺口已转建工单",
+        data=KnowledgeGapResponse.model_validate(gap),
+        trace_id=trace_id,
+    )
+
+
+@router.post("/gaps/{gap_id}/reopen", response_model=StandardResponse[KnowledgeGapResponse])
+@router.post("/knowledge-gaps/{gap_id}/reopen", response_model=StandardResponse[KnowledgeGapResponse])
+async def reopen_knowledge_gap(
+    gap_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """重新激活/恢复知识缺口为待转建"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = EvolutionService(db)
+    gap = await service.reopen_gap(gap_id)
+    return StandardResponse(
+        code=200,
+        message="知识缺口已重新激活为待转建",
         data=KnowledgeGapResponse.model_validate(gap),
         trace_id=trace_id,
     )

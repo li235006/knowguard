@@ -23,7 +23,17 @@ export const setupRouterGuards = (router: Router): void => {
     // 1. 访问登录页面
     if (to.path === '/login') {
       if (token) {
-        // 已登录访问登录页，直接重定向至知识资产控制台
+        if (!authStore.user) {
+          try {
+            await authStore.fetchCurrentUser()
+          } catch {
+            authStore.clearAuth()
+            return next()
+          }
+        }
+        if (authStore.isCommonUser || authStore.user?.role_code === 'ROLE_COMMON_USER') {
+          return next({ path: '/chat' })
+        }
         return next({ path: '/admin/knowledge/units' })
       }
       return next()
@@ -50,7 +60,6 @@ export const setupRouterGuards = (router: Router): void => {
       if (!authStore.user) {
         try {
           await authStore.fetchCurrentUser()
-          return next()
         } catch {
           // Token 过期或拉取失败，清空本地存储后跳转登录页，杜绝死锁
           authStore.clearAuth()
@@ -58,6 +67,14 @@ export const setupRouterGuards = (router: Router): void => {
             path: '/login',
             query: { redirect: to.fullPath }
           })
+        }
+      }
+
+      // 5. 普通员工越权访问管理后台严格拦截 (01规范第3节/5.1节、02规范第3节/8.4节)
+      if (to.path.startsWith('/admin')) {
+        if (authStore.isCommonUser || authStore.user?.role_code === 'ROLE_COMMON_USER') {
+          console.warn('[RouterGuard] 普通员工严禁访问后台管理路由，已重定向至智能问答工作台:', to.path)
+          return next({ path: '/chat' })
         }
       }
 

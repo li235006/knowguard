@@ -117,8 +117,9 @@
 
     <!-- Bottom Section: Link to Admin & User Profile -->
     <div class="flex flex-col gap-2 pt-2 border-t border-[#F1F5F9] shrink-0">
-      <!-- Link to Management Console -->
+      <!-- Link to Management Console (Hidden for Common Users) -->
       <router-link
+        v-if="!authStore.isCommonUser && authStore.user?.role_code !== 'ROLE_COMMON_USER'"
         to="/admin/knowledge/units"
         class="flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-[#475569] hover:bg-[#F8FAFC] transition-colors"
       >

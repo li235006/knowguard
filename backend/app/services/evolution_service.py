@@ -535,6 +535,17 @@ class EvolutionService:
         await self.db.refresh(gap)
         return gap
 
+    async def reopen_gap(self, gap_id: int) -> KnowledgeGap:
+        """重新激活/恢复知识缺口为待转建 (OPEN)"""
+        gap = await self.db.get(KnowledgeGap, gap_id)
+        if not gap or gap.is_deleted:
+            raise EntityNotFoundError(message=f"知识缺口 ID {gap_id} 不存在", code=40401)
+        gap.status = "OPEN"
+        gap.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        await self.db.refresh(gap)
+        return gap
+
     # 知识缺口方法规范别名 (对齐 P2-2 契约)
     resolve_knowledge_gap = resolve_gap
     ignore_knowledge_gap = ignore_gap

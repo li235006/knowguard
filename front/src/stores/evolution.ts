@@ -30,6 +30,7 @@ import {
   convertKnowledgeGapApi,
   resolveKnowledgeGapApi,
   ignoreKnowledgeGapApi,
+  reopenKnowledgeGapApi,
   triggerClusterMiningApi,
   getEvolutionMetricsApi
 } from '@/api/evolution'
@@ -226,9 +227,17 @@ export const useEvolutionStore = defineStore('evolution', () => {
   }
 
   // 13. 标记知识缺口已解决
-  const resolveKnowledgeGap = async (gapId: number) => {
-    const res = await resolveKnowledgeGapApi(gapId)
+  const resolveKnowledgeGap = async (gapId: number, payload?: { audit_note?: string; resolution_type?: string }) => {
+    const res = await resolveKnowledgeGapApi(gapId, payload)
     if (!res) throw new Error('标记缺口已解决失败')
+    await Promise.all([fetchKnowledgeGaps(gapsPage.value), fetchMetrics()])
+    return res.data
+  }
+
+  // 13.5 重新激活知识缺口
+  const reopenKnowledgeGap = async (gapId: number) => {
+    const res = await reopenKnowledgeGapApi(gapId)
+    if (!res) throw new Error('重新激活缺口失败')
     await Promise.all([fetchKnowledgeGaps(gapsPage.value), fetchMetrics()])
     return res.data
   }
@@ -305,6 +314,7 @@ export const useEvolutionStore = defineStore('evolution', () => {
     fetchKnowledgeGaps,
     convertKnowledgeGap,
     resolveKnowledgeGap,
+    reopenKnowledgeGap,
     ignoreKnowledgeGap,
     triggerMining,
     openEditDrawer,

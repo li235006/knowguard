@@ -125,7 +125,7 @@
             <td class="py-3 px-4">
               <div class="font-medium text-[#0F172A]">{{ log.username || '员工' }}</div>
               <div class="text-[10px] text-slate-400">
-                {{ log.dept_name || (log as any).user_dept || '通用部门' }} · {{ log.role_name || (log as any).user_role || '普通员工' }}
+                {{ log.dept_name || (log as any).user_dept || '通用部门' }} · {{ formatRole(log.role_name || (log as any).user_role) }}
               </div>
             </td>
 
@@ -280,6 +280,17 @@ const clearSearch = () => {
 
 const changePage = (page: number) => {
   analyticsStore.fetchAuditLogs(page)
+}
+
+const formatRole = (role?: string) => {
+  if (!role) return '普通员工'
+  const map: Record<string, string> = {
+    ROLE_SUPER_ADMIN: '超级管理员',
+    ROLE_ADMIN: '知识管理员',
+    ROLE_AUDITOR: '合规审计员',
+    ROLE_EMPLOYEE: '普通员工'
+  }
+  return map[role] || role
 }
 
 const handleExport = () => {

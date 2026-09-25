@@ -47,6 +47,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         async with AsyncSessionLocal() as session:
             service = IAMService(session)
             await service.init_builtin_roles_and_permissions()
+            # 预热加载数据库既有切片至 Milvus (解决 InMemory 模式 0 召回缺陷)
+            from app.core.milvus import milvus_service
+            await milvus_service.warm_up_from_database(session)
     except Exception as e:
         # 在纯单元测试或未启动 MySQL 容器时降级
         pass

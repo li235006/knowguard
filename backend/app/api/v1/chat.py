@@ -61,13 +61,8 @@ async def chat_completions(
     """
     user_ctx = await get_optional_user(request)
     if not user_ctx:
-        user_ctx = UserContext(
-            user_id=0,
-            employee_id="anonymous",
-            username="anonymous",
-            real_name="匿名员工",
-            is_superuser=False,
-        )
+        from app.core.exceptions import AuthenticationError
+        raise AuthenticationError(message="未登录或身份凭证已失效，请先登录系统后再发起问答", code=40101)
 
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("X-Trace-Id")
 

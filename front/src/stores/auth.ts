@@ -120,11 +120,17 @@ export const useAuthStore = defineStore('auth', () => {
     return permissionCodes.some((code) => perms.includes(code))
   }
 
+  const isCommonUser = computed(() => {
+    if (!user.value) return false
+    return user.value.role_code === 'ROLE_COMMON_USER' && !user.value.is_superuser
+  })
+
   return {
     token,
     refreshToken,
     user,
     isAuthenticated,
+    isCommonUser,
     setToken,
     setUser,
     clearAuth,

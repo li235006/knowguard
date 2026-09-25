@@ -64,17 +64,17 @@
             <!-- Silent Fallback Card (越权降级或未命中) -->
             <SilentFallback v-if="msg.is_silent_fallback" />
 
-            <!-- Citation Cards (溯源引用卡片) -->
+            <!-- Citation Cards (溯源引用卡片: 置信度超 60% 且最多展示 4 篇，回答完成后最后呈现) -->
             <div
-              v-if="msg.citations && msg.citations.length > 0"
+              v-if="filteredCitations(msg).length > 0 && (msg.content || msg.status !== 'streaming')"
               class="flex flex-col gap-2 pt-2 border-t border-[#F1F5F9]"
             >
               <div class="flex items-center gap-1.5 text-[11px] font-semibold text-[#64748B]">
                 <BookOpen :size="13" class="text-[#0071E3]" />
-                <span>知识溯源参考 ({{ msg.citations.length }} 篇)：</span>
+                <span>知识溯源参考 ({{ filteredCitations(msg).length }} 篇)：</span>
               </div>
               <CitationCard
-                v-for="cite in msg.citations"
+                v-for="cite in filteredCitations(msg)"
                 :key="cite.chunk_id"
                 :citation="cite"
               />
@@ -84,34 +84,56 @@
           <!-- Bottom Feedback Actions Row -->
           <div
             v-if="msg.status !== 'streaming'"
-            class="flex items-center gap-3 px-1 text-[#94A3B8] text-[11px] select-none"
+            class="flex items-center justify-between px-1 text-[#94A3B8] text-[11px] select-none"
           >
-            <button
-              type="button"
-              class="flex items-center gap-1 hover:text-[#0071E3] transition-colors"
-              title="有帮助"
-              @click="toggleLike(msg.id)"
-            >
-              <ThumbsUp :size="12" />
-              <span>赞同</span>
-            </button>
-            <button
-              type="button"
-              class="flex items-center gap-1 hover:text-red-500 transition-colors"
-              title="待改进"
-              @click="toggleDislike(msg.id)"
-            >
-              <ThumbsDown :size="12" />
-            </button>
-            <button
-              type="button"
-              class="flex items-center gap-1 hover:text-[#0F172A] transition-colors ml-1"
-              title="复制回复内容"
-              @click="copyContent(msg.content)"
-            >
-              <Copy :size="12" />
-              <span>{{ copyStatus[msg.id] ? '已复制' : '复制' }}</span>
-            </button>
+            <div class="flex items-center gap-3">
+              <button
+                type="button"
+                class="flex items-center gap-1 hover:text-[#0071E3] transition-colors cursor-pointer"
+                title="有帮助"
+                @click="toggleLike(msg.id)"
+              >
+                <ThumbsUp :size="12" />
+                <span>赞同</span>
+              </button>
+              <button
+                type="button"
+                class="flex items-center gap-1 hover:text-red-500 transition-colors cursor-pointer"
+                title="待改进"
+                @click="toggleDislike(msg.id)"
+              >
+                <ThumbsDown :size="12" />
+              </button>
+              <button
+                type="button"
+                class="flex items-center gap-1 hover:text-[#0F172A] transition-colors ml-1 cursor-pointer"
+                title="复制回复内容"
+                @click="copyContent(msg.content)"
+              >
+                <Copy :size="12" />
+                <span>{{ copyStatus[msg.id] ? '已复制' : '复制' }}</span>
+              </button>
+            </div>
+
+            <!-- Model Provenance Tag (判断是否真的调用大模型) -->
+            <div class="flex items-center gap-1.5 text-[10px]">
+              <span
+                v-if="msg.is_real_llm || msg.llm_source === 'remote_dashscope'"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200"
+                title="真实调用阿里云百炼通义千问云端大模型生成"
+              >
+                <Sparkles :size="11" class="text-emerald-600" />
+                <span>{{ msg.llm_model || 'qwen3.7-flash' }} · 云端大模型已调用</span>
+              </span>
+              <span
+                v-else
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200"
+                title="本地离线安全合成输出"
+              >
+                <Cpu :size="11" class="text-blue-600" />
+                <span>企业知识大脑引擎响应</span>
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -126,8 +148,8 @@
  */
 
 import { ref, computed, watch, nextTick } from 'vue'
-import { Shield, BookOpen, ThumbsUp, ThumbsDown, Copy } from 'lucide-vue-next'
-import type { ChatMessage } from '@/types/chat'
+import { Shield, BookOpen, ThumbsUp, ThumbsDown, Copy, Sparkles, Cpu } from 'lucide-vue-next'
+import type { ChatMessage, CitationItem } from '@/types/chat'
 import { useAuthStore } from '@/stores/auth'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import CitationCard from './CitationCard.vue'
@@ -136,6 +158,14 @@ import SilentFallback from './SilentFallback.vue'
 const props = defineProps<{
   messages: ChatMessage[]
 }>()
+
+// 用户置信度硬性过滤：超 60% (>= 0.60)，且最多展示 4 篇
+const filteredCitations = (msg: ChatMessage): CitationItem[] => {
+  if (!msg.citations) return []
+  return msg.citations
+    .filter((c) => (c.score ?? 0) >= 0.60)
+    .slice(0, 4)
+}
 
 const authStore = useAuthStore()
 const containerRef = ref<HTMLDivElement | null>(null)

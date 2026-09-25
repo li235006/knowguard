@@ -40,6 +40,8 @@ class QwenProvider(BaseLLMProvider):
         self.api_key = api_key or getattr(settings, "DASHSCOPE_API_KEY", None)
         self.model_name = model_name or getattr(settings, "QWEN_MODEL_NAME", "qwen-plus")
         self.base_url = base_url or getattr(settings, "QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.last_call_source = "not_called"
+        self.last_call_model = self.model_name
 
     async def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """非流式单次文本生成"""
@@ -53,6 +55,7 @@ class QwenProvider(BaseLLMProvider):
     ) -> AsyncGenerator[str, None]:
         """SSE 打字机流式文本生成"""
         # 1. 若配置了有效 DashScope API Key，尝试通过 dashscope / openai-compat 接口调用
+        remote_yielded = False
         if self.api_key and not self.api_key.startswith("mock_"):
             try:
                 import httpx
@@ -69,7 +72,11 @@ class QwenProvider(BaseLLMProvider):
                     "model": self.model_name,
                     "messages": messages,
                     "stream": True,
+                    "enable_thinking": False,
+                    "extra_body": {"enable_thinking": False},
                 }
+
+                logger.info(f"🚀 [QwenProvider] 发起云端大模型调用: base_url={self.base_url}, model={self.model_name}")
 
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     async with client.stream(
@@ -91,16 +98,30 @@ class QwenProvider(BaseLLMProvider):
                                         chunk_obj = json.loads(data_str)
                                         choices = chunk_obj.get("choices", [])
                                         if choices:
-                                            delta = choices[0].get("delta", {}).get("content", "")
-                                            if delta:
-                                                yield delta
+                                            delta = choices[0].get("delta", {})
+                                            content = delta.get("content")
+                                            if content:
+                                                remote_yielded = True
+                                                yield content
                                     except Exception:
                                         continue
-                            return
+                            if remote_yielded:
+                                self.last_call_source = "remote_dashscope"
+                                self.last_call_model = self.model_name
+                                logger.info(f"✅ [QwenProvider] 云端大模型 ({self.model_name}) 真实流式输出成功")
+                                return
+                        else:
+                            err_body = await response.aread()
+                            logger.warning(
+                                f"[QwenProvider] Remote API returned HTTP {response.status_code}: {err_body.decode('utf-8', errors='ignore')[:200]}"
+                            )
             except Exception as e:
                 logger.warning(f"[QwenProvider] Remote DashScope API stream failed ({e}), falling back to local synthesizer.")
 
         # 2. 离线/测试保真流式生成器：结合 prompt 上下文智能分片打字机输出
+        self.last_call_source = "local_synthesizer"
+        self.last_call_model = "local_synthesizer"
+        logger.info(f"🟡 [QwenProvider] 启用知识大脑本地安全合成器输出")
         tokens = self._synthesize_local_response(prompt)
         for token in tokens:
             await asyncio.sleep(0.005)  # 模拟平滑打字机节奏

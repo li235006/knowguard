@@ -37,6 +37,9 @@ export interface ChatMessage {
   is_silent_fallback?: boolean
   created_at: string
   status?: 'streaming' | 'done' | 'error'
+  llm_source?: string
+  llm_model?: string
+  is_real_llm?: boolean
 }
 
 export interface TextDeltaEventData {
@@ -52,6 +55,13 @@ export interface DoneEventData {
   conversation_id: string
   trace_id: string
   total_tokens?: number
+  is_silent_fallback?: boolean
+  is_faq_hit?: boolean
+  hit_faq?: boolean
+  faq_id?: number | null
+  llm_source?: string
+  llm_model?: string
+  is_real_llm?: boolean
 }
 
 export type ChatEventData =

@@ -32,6 +32,7 @@ from app.schemas.analytics import (
     AuditLogResponse,
     DashboardSummaryResponse,
     EvidenceChainDetailResponse,
+    LatencyBucketResponse,
     TopRankingsResponse,
     TrendPoint,
 )
@@ -72,6 +73,23 @@ async def get_trends(
         code=200,
         message="获取大盘趋势走势成功",
         data=[TrendPoint.model_validate(t) for t in trend_items],
+        trace_id=trace_id,
+    )
+
+
+@router.get("/latency-distribution", response_model=StandardResponse[List[LatencyBucketResponse]])
+async def get_latency_distribution(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取端到端响应耗时区间分布统计 (适配 ECharts/前端柱状图)"""
+    trace_id = getattr(request.state, "trace_id", None)
+    service = AnalyticsService(db)
+    dist_items = await service.get_latency_distribution()
+    return StandardResponse(
+        code=200,
+        message="获取端到端响应耗时分布成功",
+        data=[LatencyBucketResponse.model_validate(d) for d in dist_items],
         trace_id=trace_id,
     )
 
@@ -127,16 +145,16 @@ async def list_audit_logs(
     )
 
 
-@router.get("/audit-logs/{log_id}", response_model=StandardResponse[AuditLogResponse])
+@router.get("/audit-logs/{identifier}", response_model=StandardResponse[AuditLogResponse])
 async def get_audit_log_detail(
-    log_id: int,
+    identifier: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """获取单条审计流水明细"""
+    """获取单条审计流水明细 (支持主键 ID 或 X-Trace-Id)"""
     trace_id = getattr(request.state, "trace_id", None)
     service = AnalyticsService(db)
-    log_item = await service.get_audit_log_by_id(log_id)
+    log_item = await service.get_audit_log(identifier)
     return StandardResponse(
         code=200,
         message="获取审计流水详情成功",
@@ -145,16 +163,16 @@ async def get_audit_log_detail(
     )
 
 
-@router.get("/audit-logs/{log_id}/evidence-chain", response_model=StandardResponse[EvidenceChainDetailResponse])
+@router.get("/audit-logs/{identifier}/evidence-chain", response_model=StandardResponse[EvidenceChainDetailResponse])
 async def get_audit_evidence_chain(
-    log_id: int,
+    identifier: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """拦截证据链穿透下钻分析 (召回切片/放行切片/受限隔离切片明细)"""
     trace_id = getattr(request.state, "trace_id", None)
     service = AnalyticsService(db)
-    chain_data = await service.get_evidence_chain(log_id)
+    chain_data = await service.get_evidence_chain(identifier)
     return StandardResponse(
         code=200,
         message="获取拦截证据链明细成功",

@@ -5,8 +5,8 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
-import type { ConversationItem, ChatMessage, CitationItem, WarningEventData } from '@/types/chat'
+import { ref, reactive } from 'vue'
+import type { ConversationItem, ChatMessage, CitationItem, WarningEventData, DoneEventData } from '@/types/chat'
 import { connectSseStream } from '@/utils/sse'
 import {
   getConversationsApi,
@@ -151,16 +151,18 @@ export const useChatStore = defineStore('chat', () => {
       currentConv.title = text.length > 18 ? `${text.slice(0, 18)}...` : text
     }
 
-    // 3. 初始化 AI 空白消息气泡
-    const assistantMsg: ChatMessage = {
+    // 3. 初始化 AI 响应消息气泡 (必须使用 reactive 确保流式打字即时驱动 DOM 响应式重绘)
+    const assistantMsg = reactive<ChatMessage>({
       id: assistantMsgId,
       role: 'assistant',
       content: '',
       citations: [],
       is_silent_fallback: false,
       created_at: now,
-      status: 'streaming'
-    }
+      status: 'streaming',
+      llm_model: 'qwen3.7-flash',
+      is_real_llm: false
+    })
     messages.value.push(assistantMsg)
 
     isGenerating.value = true
@@ -169,18 +171,53 @@ export const useChatStore = defineStore('chat', () => {
     const callbacks = {
       onTextDelta: (delta: string) => {
         assistantMsg.content += delta
+        const idx = messages.value.findIndex((m) => m.id === assistantMsgId)
+        if (idx !== -1) {
+          messages.value[idx].content = assistantMsg.content
+        }
       },
       onCitation: (citation: CitationItem) => {
+        // 用户硬性要求：置信度必须超 60% (>= 0.60)，且最多展示 4 个
+        if ((citation.score ?? 0) < 0.60) {
+          return
+        }
         if (!assistantMsg.citations) assistantMsg.citations = []
-        assistantMsg.citations.push(citation)
+        if (
+          assistantMsg.citations.length < 4 &&
+          !assistantMsg.citations.some((c) => c.chunk_id === citation.chunk_id)
+        ) {
+          assistantMsg.citations.push(citation)
+        }
+        const idx = messages.value.findIndex((m) => m.id === assistantMsgId)
+        if (idx !== -1) {
+          messages.value[idx].citations = [...assistantMsg.citations]
+        }
       },
       onWarning: (warning: WarningEventData) => {
         if (warning.type === 'permission_restricted' || warning.type === 'PERMISSION_ISOLATION') {
           assistantMsg.is_silent_fallback = true
+          const idx = messages.value.findIndex((m) => m.id === assistantMsgId)
+          if (idx !== -1) {
+            messages.value[idx].is_silent_fallback = true
+          }
         }
       },
-      onDone: () => {
+      onDone: (doneData?: DoneEventData) => {
         assistantMsg.status = 'done'
+        if (doneData) {
+          assistantMsg.llm_source = doneData.llm_source
+          assistantMsg.llm_model = doneData.llm_model || 'qwen3.7-flash'
+          assistantMsg.is_real_llm = doneData.is_real_llm ?? (doneData.llm_source === 'remote_dashscope')
+        }
+        const idx = messages.value.findIndex((m) => m.id === assistantMsgId)
+        if (idx !== -1) {
+          messages.value[idx].status = 'done'
+          if (doneData) {
+            messages.value[idx].llm_source = assistantMsg.llm_source
+            messages.value[idx].llm_model = assistantMsg.llm_model
+            messages.value[idx].is_real_llm = assistantMsg.is_real_llm
+          }
+        }
         isGenerating.value = false
         activeAbortController = null
         if (currentConv) {
@@ -192,6 +229,11 @@ export const useChatStore = defineStore('chat', () => {
         assistantMsg.status = 'error'
         if (!assistantMsg.content) {
           assistantMsg.content = `服务暂时不可用: ${err.message}`
+        }
+        const target = messages.value.find((m) => m.id === assistantMsgId)
+        if (target) {
+          target.status = 'error'
+          target.content = assistantMsg.content
         }
         isGenerating.value = false
         activeAbortController = null
@@ -206,7 +248,8 @@ export const useChatStore = defineStore('chat', () => {
     if (import.meta.env.VITE_ENABLE_MOCK === 'true') {
       await mockSendChatStream(payload, callbacks, activeAbortController.signal)
     } else {
-      const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/v1/chat/completions`
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+      const url = baseUrl ? `${baseUrl.replace(/\/$/, '')}/api/v1/chat/completions` : '/api/v1/chat/completions'
       await connectSseStream({
         url,
         payload,

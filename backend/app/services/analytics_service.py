@@ -103,12 +103,12 @@ class AnalyticsService:
     async def get_dashboard_summary(self) -> Dict[str, Any]:
         """
         实时聚合统计运营监控 5 大核心 KPI:
-        1. PV (总提问量 / 访问量)
+        1. PV (总提问量 / 访问量) & 今日环比动态变化
         2. UV (独立提问 / 访问用户数)
-        3. 切片总量 (KnowledgeChunk 总数)
-        4. 已发布 FAQ (已启用的标准 FAQ 条数)
-        5. 待处理缺口 (未闭环的知识盲区工单数)
-        以及 FAQ 缓存命中率与端到端平均响应耗时
+        3. 知识单元与切片总量 (同步状态与分块)
+        4. 已发布 FAQ (已启用的标准 FAQ 条数) 与节约 Token
+        5. 待处理缺口 (未闭环的知识盲区工单数及本周新增)
+        以及 FAQ 缓存命中率与端到端平均响应耗时 (P95/P99)
         """
         # 1. PV 计算 (从 ChatAuditLog 与 Message 表聚合)
         audit_pv_res = await self.db.execute(select(func.count(ChatAuditLog.id)).where(ChatAuditLog.is_deleted == False))
@@ -120,6 +120,34 @@ class AnalyticsService:
         msg_pv = msg_pv_res.scalar() or 0
         total_pv = max(audit_pv, msg_pv)
 
+        # 今日与昨日 PV 增量动态比对
+        now_utc = datetime.now(timezone.utc)
+        today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_start = today_start - timedelta(days=1)
+
+        today_pv_res = await self.db.execute(
+            select(func.count(ChatAuditLog.id)).where(
+                ChatAuditLog.is_deleted == False,
+                ChatAuditLog.created_at >= today_start
+            )
+        )
+        today_pv = today_pv_res.scalar() or 0
+
+        yesterday_pv_res = await self.db.execute(
+            select(func.count(ChatAuditLog.id)).where(
+                ChatAuditLog.is_deleted == False,
+                ChatAuditLog.created_at >= yesterday_start,
+                ChatAuditLog.created_at < today_start
+            )
+        )
+        yesterday_pv = yesterday_pv_res.scalar() or 0
+
+        if yesterday_pv == 0:
+            pv_uv_delta = f"↑ {today_pv}次 今日提问" if today_pv > 0 else "0% 较昨日"
+        else:
+            pct = round(((today_pv - yesterday_pv) / yesterday_pv) * 100, 1)
+            pv_uv_delta = f"{'↑' if pct >= 0 else '↓'} {abs(pct)}% 较昨日"
+
         # 2. UV 计算 (独立用户数)
         audit_uv_res = await self.db.execute(
             select(func.count(func.distinct(ChatAuditLog.user_id))).where(ChatAuditLog.is_deleted == False, ChatAuditLog.user_id.isnot(None))
@@ -130,24 +158,26 @@ class AnalyticsService:
         registered_users = user_cnt_res.scalar() or 0
         total_uv = max(audit_uv, min(registered_users, 1 if total_pv > 0 else 0))
 
-        # 3. 知识切片与文档总量
+        # 3. 知识切片与文档总量与同步状态
         chunks_res = await self.db.execute(select(func.count(KnowledgeChunk.id)).where(KnowledgeChunk.is_deleted == False))
         chunks_count = chunks_res.scalar() or 0
 
         units_res = await self.db.execute(select(func.count(KnowledgeUnit.id)).where(KnowledgeUnit.is_deleted == False))
         units_count = units_res.scalar() or 0
 
-        # 4. 已发布标准 FAQ 总量
+        units_synced_res = await self.db.execute(
+            select(func.count(KnowledgeUnit.id)).where(
+                KnowledgeUnit.is_deleted == False,
+                KnowledgeUnit.status == "INDEXED"
+            )
+        )
+        units_synced = units_synced_res.scalar() or 0
+        units_pending = max(0, units_count - units_synced)
+
+        # 4. 已发布标准 FAQ 总量与缓存命中率
         faqs_res = await self.db.execute(select(func.count(FAQItem.id)).where(FAQItem.is_deleted == False, FAQItem.is_enabled == True))
         published_faqs = faqs_res.scalar() or 0
 
-        # 5. 待处理缺口盲区总量 (OPEN / PENDING 状态)
-        gaps_res = await self.db.execute(
-            select(func.count(KnowledgeGap.id)).where(KnowledgeGap.is_deleted == False, KnowledgeGap.status.in_(["OPEN", "PENDING"]))
-        )
-        open_gaps = gaps_res.scalar() or 0
-
-        # 缓存命中率与算力平均延时统计
         faq_hits_res = await self.db.execute(
             select(func.coalesce(func.sum(FAQItem.hit_count), 0)).where(FAQItem.is_deleted == False)
         )
@@ -156,12 +186,55 @@ class AnalyticsService:
         if hit_rate > 100.0:
             hit_rate = 100.0
 
+        # 节约 Token 计算 (基于 FAQ 命中免推理估算，每次约1500 Tokens)
+        tokens_saved_num = int(faq_hits * 1500)
+        if tokens_saved_num >= 1_000_000:
+            tokens_saved = f"节约 {round(tokens_saved_num / 1_000_000, 1)}M Token"
+        elif tokens_saved_num >= 1000:
+            tokens_saved = f"节约 {round(tokens_saved_num / 1000, 1)}k Token"
+        else:
+            tokens_saved = f"节约 {tokens_saved_num} Token"
+
+        # 5. 待处理缺口盲区总量 (OPEN / PENDING 状态)
+        gaps_res = await self.db.execute(
+            select(func.count(KnowledgeGap.id)).where(KnowledgeGap.is_deleted == False, KnowledgeGap.status.in_(["OPEN", "PENDING"]))
+        )
+        open_gaps = gaps_res.scalar() or 0
+
+        week_start = now_utc - timedelta(days=7)
+        gaps_week_res = await self.db.execute(
+            select(func.count(KnowledgeGap.id)).where(
+                KnowledgeGap.is_deleted == False,
+                KnowledgeGap.created_at >= week_start
+            )
+        )
+        gaps_week = gaps_week_res.scalar() or 0
+        unresolved_gaps_delta = f"↑ {gaps_week}个 本周新增"
+
+        # 6. 端到端延时 (平均 / P95 / P99)
         latency_res = await self.db.execute(
             select(func.coalesce(func.avg(ChatAuditLog.latency_ms), 0.0)).where(ChatAuditLog.is_deleted == False)
         )
         avg_latency = round(float(latency_res.scalar() or 0.0), 2)
         if avg_latency == 0.0 and total_pv > 0:
             avg_latency = 18.5
+
+        all_lats_res = await self.db.execute(
+            select(ChatAuditLog.latency_ms).where(
+                ChatAuditLog.is_deleted == False,
+                ChatAuditLog.latency_ms > 0
+            )
+        )
+        all_lats = sorted([float(r[0]) for r in all_lats_res.all()])
+        if all_lats:
+            p95_idx = int(len(all_lats) * 0.95)
+            p99_idx = min(int(len(all_lats) * 0.99), len(all_lats) - 1)
+            p95_val = round(all_lats[p95_idx], 1)
+            p99_val = round(all_lats[p99_idx], 1)
+            p99_str = f"{p99_val}ms" if p99_val < 1000 else f"{round(p99_val / 1000, 2)}s"
+        else:
+            p95_val = 0.0
+            p99_str = "0ms"
 
         tokens_res = await self.db.execute(
             select(func.coalesce(func.sum(ChatAuditLog.total_tokens), 0)).where(ChatAuditLog.is_deleted == False)
@@ -171,32 +244,39 @@ class AnalyticsService:
         return {
             "pv": total_pv,
             "uv": total_uv,
+            "pv_uv_delta": pv_uv_delta,
             "chunks_count": chunks_count,
             "total_chunks": chunks_count,
             "knowledge_units_count": units_count,
+            "units_synced": units_synced,
+            "units_pending": units_pending,
             "published_faqs": published_faqs,
+            "published_faqs_count": published_faqs,
             "faqs_count": published_faqs,
             "open_gaps": open_gaps,
             "pending_gaps": open_gaps,
+            "unresolved_gaps_count": open_gaps,
+            "unresolved_gaps_delta": unresolved_gaps_delta,
             "knowledge_gaps_count": open_gaps,
             "faq_cache_hit_rate": hit_rate,
+            "tokens_saved": tokens_saved,
             "avg_latency_ms": avg_latency,
+            "p95_latency_ms": p95_val,
+            "p99_latency": p99_str,
             "total_tokens": total_tokens,
         }
 
-    # ==================== 3. 近 7 天 Token/延时趋势聚合 ====================
+    # ==================== 3. 近 7 天 Token/延时/QPS趋势聚合 ====================
 
     async def get_token_latency_trends(self, days: int = 7) -> List[Dict[str, Any]]:
         """
-        按天聚合统计近 N 天 (默认 7 天) 的 Token 双轴消耗与平均响应延时
+        按天聚合统计近 N 天 (默认 7 天) 的 Token 双轴消耗与峰值 QPS
         - 生成日期序列: YYYY-MM-DD
-        - 聚合当日 Prompt Tokens, Completion Tokens, Total Tokens, 响应耗时与提问 PV
+        - 聚合当日 Prompt Tokens, Completion Tokens, Total Tokens, 响应耗时与提问 PV/峰值 QPS
         """
         now = datetime.now(timezone.utc)
-        # 生成连续的日期序列
         date_list = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
 
-        # 查询范围内的审计流水
         stmt = select(ChatAuditLog).where(ChatAuditLog.is_deleted == False)
         res = await self.db.execute(stmt)
         logs = res.scalars().all()
@@ -204,10 +284,12 @@ class AnalyticsService:
         daily_data: Dict[str, Dict[str, Any]] = {
             d: {
                 "date": d,
+                "time": d[5:],
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
                 "latencies": [],
+                "minute_counts": {},
                 "pv": 0,
             }
             for d in date_list
@@ -223,23 +305,99 @@ class AnalyticsService:
                     if log.latency_ms > 0:
                         daily_data[d_str]["latencies"].append(log.latency_ms)
                     daily_data[d_str]["pv"] += 1
+                    min_str = log.created_at.strftime("%H:%M")
+                    m_map = daily_data[d_str]["minute_counts"]
+                    m_map[min_str] = m_map.get(min_str, 0) + 1
 
         trends: List[Dict[str, Any]] = []
         for d in date_list:
             item = daily_data[d]
             lats = item["latencies"]
             avg_lat = round(sum(lats) / len(lats), 2) if lats else 0.0
+            m_map = item["minute_counts"]
+            max_in_min = max(m_map.values()) if m_map else 0
+            # 峰值 QPS: 当日最高频分钟按秒折算，若单日有请求至少为 1.0 或折算值
+            qps_val = round(max_in_min / 60.0, 2) if max_in_min > 0 else 0.0
+            if item["pv"] > 0 and qps_val < 0.1:
+                qps_val = round(min(float(item["pv"]), 1.0), 2)
+
             trends.append({
                 "date": d,
+                "time": item["time"],
                 "prompt_tokens": item["prompt_tokens"],
                 "completion_tokens": item["completion_tokens"],
                 "total_tokens": item["total_tokens"],
                 "latency_ms": avg_lat,
                 "avg_latency_ms": avg_lat,
                 "pv": item["pv"],
+                "qps": qps_val,
             })
 
         return trends
+
+    # ==================== 3.5 端到端响应耗时区间分布统计 ====================
+
+    async def get_latency_distribution(self) -> List[Dict[str, Any]]:
+        """
+        端到端响应耗时区间分布 (5 大标准阶梯区间):
+        - < 50ms (FAQ直出): 极速缓存命中
+        - 50-200ms (小切片): 精确索引匹配
+        - 200-500ms (多跳): 混合重排解析
+        - 500ms-1s (重排): 复杂语义召回
+        - > 1s (长上下文): 大模型推理消耗
+        """
+        stmt = select(ChatAuditLog.latency_ms).where(ChatAuditLog.is_deleted == False)
+        res = await self.db.execute(stmt)
+        all_lats = [float(r[0]) for r in res.all() if r[0] is not None]
+        total = len(all_lats)
+
+        c0, c1, c2, c3, c4 = 0, 0, 0, 0, 0
+        for lat in all_lats:
+            if lat < 50.0:
+                c0 += 1
+            elif lat < 200.0:
+                c1 += 1
+            elif lat < 500.0:
+                c2 += 1
+            elif lat < 1000.0:
+                c3 += 1
+            else:
+                c4 += 1
+
+        calc_pct = lambda c: round((c / total) * 100.0, 1) if total > 0 else 0.0
+
+        return [
+            {
+                "label": "< 50ms (FAQ直出)",
+                "percent": calc_pct(c0),
+                "count": c0,
+                "sub_label": "极速缓存命中",
+            },
+            {
+                "label": "50-200ms (小切片)",
+                "percent": calc_pct(c1),
+                "count": c1,
+                "sub_label": "精确索引匹配",
+            },
+            {
+                "label": "200-500ms (多跳)",
+                "percent": calc_pct(c2),
+                "count": c2,
+                "sub_label": "混合重排解析",
+            },
+            {
+                "label": "500ms-1s (重排)",
+                "percent": calc_pct(c3),
+                "count": c3,
+                "sub_label": "复杂语义召回",
+            },
+            {
+                "label": "> 1s (长上下文)",
+                "percent": calc_pct(c4),
+                "count": c4,
+                "sub_label": "大模型推理消耗",
+            },
+        ]
 
     # ==================== 4. 高频提问与热门知识 TOP 5 榜单 ====================
 
@@ -247,77 +405,111 @@ class AnalyticsService:
         """
         查询运营大盘双维度 TOP 榜单:
         1. 高频提问 TOP 5 (优先从 KnowledgeGap 按频次降序，辅以审计日志与 FAQ)
-        2. 热门知识引用 TOP 5 (从知识单元或切片热度按关联频次降序)
+        2. 热门知识引用 TOP 5 (从真实审计日志中切片引用关联频次动态降序汇总)
         """
-        # 1. 高频提问 TOP 5
-        gaps_stmt = (
-            select(KnowledgeGap)
-            .where(KnowledgeGap.is_deleted == False)
-            .order_by(KnowledgeGap.hit_count.desc(), KnowledgeGap.id.desc())
+        # 1. 高频提问 TOP 5 (严格从问答全链路真实审计流水 ChatAuditLog 聚合实际提问频次)
+        log_group_stmt = (
+            select(ChatAuditLog.query_text, func.count(ChatAuditLog.id).label("cnt"))
+            .where(ChatAuditLog.is_deleted == False, ChatAuditLog.query_text != "")
+            .group_by(ChatAuditLog.query_text)
+            .order_by(func.count(ChatAuditLog.id).desc())
             .limit(limit)
         )
-        gaps_res = await self.db.execute(gaps_stmt)
-        gaps = gaps_res.scalars().all()
-
+        log_res = await self.db.execute(log_group_stmt)
         top_queries: List[Dict[str, Any]] = []
-        for rank, g in enumerate(gaps, start=1):
-            top_queries.append({
-                "title": g.query_text,
-                "query": g.query_text,
-                "count": g.hit_count,
-                "hit_count": g.hit_count,
-                "rank": rank,
-            })
+        for rank, row in enumerate(log_res.all(), start=1):
+            q_text, cnt = row[0], row[1]
+            if q_text and q_text.strip():
+                top_queries.append({
+                    "title": q_text.strip(),
+                    "query": q_text.strip(),
+                    "count": cnt,
+                    "hit_count": cnt,
+                    "rank": rank,
+                })
 
-        # 若缺口不足，从审计流水高频提问补充
+        # 若真实审计流水中去重提问不足 limit 条，从历史会话消息表补充
         if len(top_queries) < limit:
-            log_group_stmt = (
-                select(ChatAuditLog.query_text, func.count(ChatAuditLog.id).label("cnt"))
-                .where(ChatAuditLog.is_deleted == False)
-                .group_by(ChatAuditLog.query_text)
-                .order_by(func.count(ChatAuditLog.id).desc())
+            msg_group_stmt = (
+                select(Message.content, func.count(Message.id).label("cnt"))
+                .where(Message.is_deleted == False, Message.role == "user", Message.content != "")
+                .group_by(Message.content)
+                .order_by(func.count(Message.id).desc())
                 .limit(limit)
             )
-            log_res = await self.db.execute(log_group_stmt)
+            msg_res = await self.db.execute(msg_group_stmt)
             existing_queries = {t["title"] for t in top_queries}
-            for row in log_res.all():
-                q_text, cnt = row[0], row[1]
-                if q_text and q_text not in existing_queries:
+            for row in msg_res.all():
+                m_text, cnt = row[0], row[1]
+                if m_text and m_text.strip() and m_text.strip() not in existing_queries:
                     top_queries.append({
-                        "title": q_text,
-                        "query": q_text,
+                        "title": m_text.strip(),
+                        "query": m_text.strip(),
                         "count": cnt,
                         "hit_count": cnt,
                         "rank": len(top_queries) + 1,
                     })
-                    existing_queries.add(q_text)
+                    existing_queries.add(m_text.strip())
                     if len(top_queries) >= limit:
                         break
 
-        # 2. 热门知识引用 TOP 5
-        units_stmt = (
-            select(KnowledgeUnit)
-            .where(KnowledgeUnit.is_deleted == False)
-            .order_by(KnowledgeUnit.id.desc())
-            .limit(limit)
+        # 2. 热门知识引用 TOP 5 (动态解析审计流水中召回或放行的切片)
+        audit_chunks_stmt = select(ChatAuditLog.allowed_chunk_ids, ChatAuditLog.recalled_chunk_ids).where(
+            ChatAuditLog.is_deleted == False
         )
-        units_res = await self.db.execute(units_stmt)
-        units = units_res.scalars().all()
+        audit_res = await self.db.execute(audit_chunks_stmt)
+        chunk_hit_counts: Dict[int, int] = {}
+        for allowed_ids, recalled_ids in audit_res.all():
+            target_ids = allowed_ids or recalled_ids or []
+            for cid in target_ids:
+                if isinstance(cid, int):
+                    chunk_hit_counts[cid] = chunk_hit_counts.get(cid, 0) + 1
 
         top_knowledge: List[Dict[str, Any]] = []
-        for rank, u in enumerate(units, start=1):
-            # 获取该文档下的切片数作为热度指标
-            chunk_cnt_stmt = select(func.count(KnowledgeChunk.id)).where(
-                KnowledgeChunk.document_id == u.id,
-                KnowledgeChunk.is_deleted == False,
+        if chunk_hit_counts:
+            # 关联查询 KnowledgeChunk 所属的文档 KnowledgeUnit
+            top_cids = sorted(chunk_hit_counts.keys(), key=lambda k: chunk_hit_counts[k], reverse=True)[:limit * 2]
+            c_stmt = (
+                select(KnowledgeChunk.id, KnowledgeChunk.document_id, KnowledgeUnit.title)
+                .join(KnowledgeUnit, KnowledgeChunk.document_id == KnowledgeUnit.id)
+                .where(KnowledgeChunk.id.in_(top_cids), KnowledgeUnit.is_deleted == False)
             )
-            c_cnt = (await self.db.execute(chunk_cnt_stmt)).scalar() or 1
-            top_knowledge.append({
-                "title": u.title,
-                "count": c_cnt,
-                "hit_count": c_cnt,
-                "rank": rank,
-            })
+            c_res = await self.db.execute(c_stmt)
+            unit_hits: Dict[str, int] = {}
+            for cid, doc_id, u_title in c_res.all():
+                hits = chunk_hit_counts.get(cid, 1)
+                unit_hits[u_title] = unit_hits.get(u_title, 0) + hits
+
+            sorted_units = sorted(unit_hits.items(), key=lambda x: x[1], reverse=True)[:limit]
+            for rank, (u_title, h_cnt) in enumerate(sorted_units, start=1):
+                top_knowledge.append({
+                    "title": u_title,
+                    "count": h_cnt,
+                    "hit_count": h_cnt,
+                    "rank": rank,
+                })
+
+        # 若真实审计引用较少，以系统内已存知识单元切片数作为基础补充
+        if len(top_knowledge) < limit:
+            existing_titles = {k["title"] for k in top_knowledge}
+            units_stmt = (
+                select(KnowledgeUnit)
+                .where(KnowledgeUnit.is_deleted == False)
+                .order_by(KnowledgeUnit.chunk_count.desc(), KnowledgeUnit.id.desc())
+                .limit(limit)
+            )
+            units_res = await self.db.execute(units_stmt)
+            for u in units_res.scalars().all():
+                if u.title not in existing_titles:
+                    top_knowledge.append({
+                        "title": u.title,
+                        "count": max(u.chunk_count, 1),
+                        "hit_count": max(u.chunk_count, 1),
+                        "rank": len(top_knowledge) + 1,
+                    })
+                    existing_titles.add(u.title)
+                    if len(top_knowledge) >= limit:
+                        break
 
         return {
             "top_queries": top_queries[:limit],
@@ -359,19 +551,36 @@ class AnalyticsService:
         res = await self.db.execute(stmt)
         return list(res.scalars().all()), total
 
-    async def get_audit_log_by_id(self, log_id: int) -> ChatAuditLog:
-        """根据主键 ID 获取审计流水详情"""
-        log = await self.db.get(ChatAuditLog, log_id)
-        if not log or log.is_deleted:
-            raise EntityNotFoundError(message=f"审计流水记录 ID {log_id} 不存在", code=40401)
-        return log
+    async def get_audit_log(self, identifier: Any) -> ChatAuditLog:
+        """根据主键 ID 或 TraceID 查询审计流水详情"""
+        # 1. 尝试按主键 ID 查询
+        if isinstance(identifier, int) or (isinstance(identifier, str) and str(identifier).isdigit()):
+            log = await self.db.get(ChatAuditLog, int(identifier))
+            if log and not log.is_deleted:
+                return log
 
-    async def get_evidence_chain(self, log_id: int) -> Dict[str, Any]:
+        # 2. 尝试按 trace_id 查询
+        stmt = select(ChatAuditLog).where(
+            ChatAuditLog.trace_id == str(identifier),
+            ChatAuditLog.is_deleted == False
+        )
+        res = await self.db.execute(stmt)
+        log = res.scalar_one_or_none()
+        if log:
+            return log
+
+        raise EntityNotFoundError(message=f"审计流水记录 [{identifier}] 不存在", code=40401)
+
+    async def get_audit_log_by_id(self, log_id: Any) -> ChatAuditLog:
+        """根据主键 ID 或 TraceID 获取审计流水详情 (兼容方法)"""
+        return await self.get_audit_log(log_id)
+
+    async def get_evidence_chain(self, log_id: Any) -> Dict[str, Any]:
         """
         拦截证据链下钻分析:
         - 穿透初筛召回切片、4D 放行切片、越权拦截切片与策略成因
         """
-        log = await self.get_audit_log_by_id(log_id)
+        log = await self.get_audit_log(log_id)
         if log.evidence_chain:
             return log.evidence_chain
 

@@ -636,7 +636,10 @@ export const convertKnowledgeGapApi = async (
 }
 
 // 13. 标记知识缺口为已解决 (POST /api/v1/evolution/gaps/{id}/resolve)
-export const resolveKnowledgeGapApi = async (gapId: number): Promise<ApiResponse<KnowledgeGap>> => {
+export const resolveKnowledgeGapApi = async (
+  gapId: number,
+  payload?: { audit_note?: string; resolution_type?: string }
+): Promise<ApiResponse<KnowledgeGap>> => {
   if (isMockEnabled()) {
     await new Promise((resolve) => setTimeout(resolve, 100))
     const gap = liveMockKnowledgeGaps.find((g) => g.id === gapId)
@@ -652,7 +655,7 @@ export const resolveKnowledgeGapApi = async (gapId: number): Promise<ApiResponse
     }
   }
 
-  return request.post(`/api/v1/evolution/gaps/${gapId}/resolve`)
+  return request.post(`/api/v1/evolution/gaps/${gapId}/resolve`, payload)
 }
 
 // 14. 忽略/驳回知识缺口 (POST /api/v1/evolution/gaps/{id}/ignore)
@@ -673,6 +676,26 @@ export const ignoreKnowledgeGapApi = async (gapId: number): Promise<ApiResponse<
   }
 
   return request.post(`/api/v1/evolution/gaps/${gapId}/ignore`)
+}
+
+// 15. 重新激活知识缺口 (POST /api/v1/evolution/gaps/{id}/reopen)
+export const reopenKnowledgeGapApi = async (gapId: number): Promise<ApiResponse<KnowledgeGap>> => {
+  if (isMockEnabled()) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const gap = liveMockKnowledgeGaps.find((g) => g.id === gapId)
+    if (gap) {
+      gap.status = 'OPEN'
+    }
+    return {
+      code: 200,
+      message: '知识缺口已重新激活',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data: (gap || { id: gapId, status: 'OPEN', query_text: '' }) as any,
+      trace_id: generateTraceId()
+    }
+  }
+
+  return request.post(`/api/v1/evolution/gaps/${gapId}/reopen`)
 }
 
 // 13. 获取知识自进化看板核心度量统计 (GET /api/v1/evolution/metrics)

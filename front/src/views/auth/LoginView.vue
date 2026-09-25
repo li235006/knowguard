@@ -205,8 +205,9 @@ const handleLogin = async () => {
       password: loginForm.password.trim()
     })
 
-    // 跳转重定向或默认资产主页
-    const redirectPath = (route.query.redirect as string) || '/admin/knowledge/units'
+    // 根据角色智能重定向：普通员工默认进入问答工作台，管理员进入后台控制台
+    const defaultPath = authStore.isCommonUser ? '/chat' : '/admin/knowledge/units'
+    const redirectPath = (route.query.redirect as string) || defaultPath
     router.push(redirectPath)
   } catch (err) {
     errorMessage.value = err instanceof Error ? err.message : '网络连接失败，请确认后端或 Mock 服务状态'

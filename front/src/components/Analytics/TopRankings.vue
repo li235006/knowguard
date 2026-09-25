@@ -22,8 +22,8 @@
         </button>
       </div>
 
-      <span class="text-[10px] text-[#0071E3] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 font-mono font-medium">
-        PRD 5.6.2
+      <span class="text-[10px] text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 font-medium">
+        实时热度统计
       </span>
     </div>
 

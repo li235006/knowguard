@@ -108,28 +108,38 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-const navItems = [
+const allNavItems = [
   {
     name: '运营与安全大盘',
     path: '/admin/analytics',
-    icon: Activity
+    icon: Activity,
+    permission: 'analytics:menu'
   },
   {
     name: '知识资产台账',
     path: '/admin/knowledge/units',
-    icon: Database
+    icon: Database,
+    permission: 'knowledge:menu'
   },
   {
     name: '知识自进化运营',
     path: '/admin/evolution',
-    icon: Zap
+    icon: Zap,
+    permission: 'evolution:menu'
   },
   {
     name: '组织与系统设置',
     path: '/admin/system/departments',
-    icon: Settings
+    icon: Settings,
+    permission: 'system:menu'
   }
 ]
+
+const navItems = computed(() => {
+  if (authStore.user?.is_superuser) return allNavItems
+  if (authStore.isCommonUser || authStore.user?.role_code === 'ROLE_COMMON_USER') return []
+  return allNavItems.filter((item) => authStore.hasPermission(item.permission))
+})
 
 const isNavActive = (path: string): boolean => {
   if (path === '/admin/system/departments') {

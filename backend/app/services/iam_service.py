@@ -260,6 +260,23 @@ class IAMService:
                             name=p["label"],
                             resource_path=p.get("resource_path"),
                         ))
+                elif role.code == "ROLE_KNOWLEDGE_ADMIN":
+                    # 知识管理员赋权：知识资产管理、知识自进化中心、安全大盘及智能问答
+                    admin_perms = [
+                        "knowledge:menu", "knowledge:view", "knowledge:import", "knowledge:reparse", "knowledge:delete",
+                        "evolution:menu", "evolution:view", "evolution:ticket:create", "faq:publish",
+                        "analytics:menu", "analytics:view",
+                        "chat:menu", "chat:view", "chat:send", "chat:feedback"
+                    ]
+                    for p in self._flatten_permission_tree(STANDARD_PERMISSION_TREE):
+                        if p["code"] in admin_perms:
+                            self.db.add(RolePermission(
+                                role_id=role.id,
+                                permission_code=p["code"],
+                                permission_type=p["type"],
+                                name=p["label"],
+                                resource_path=p.get("resource_path"),
+                            ))
                 elif role.code in ["ROLE_COMMON_USER", "ROLE_EMPLOYEE"]:
                     # 普通员工仅赋予问答相关权限
                     common_perms = ["chat:menu", "chat:view", "chat:send", "chat:feedback"]
@@ -371,7 +388,7 @@ class IAMService:
                 "real_name": "李四",
                 "password": "123456",
                 "dept_id": dept_finance.id,
-                "role_code": "ROLE_DEPT_MANAGER",
+                "role_code": "ROLE_KNOWLEDGE_ADMIN",
                 "is_superuser": False,
             },
             {

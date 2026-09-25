@@ -173,7 +173,7 @@
                   <template v-if="gap.status === 'OPEN'">
                     <button
                       type="button"
-                      class="px-2 py-1 text-[11px] font-medium text-white bg-[#0071E3] hover:bg-[#0077ED] rounded transition-colors shadow-2xs"
+                      class="px-2 py-1 text-[11px] font-medium text-white bg-[#0071E3] hover:bg-[#0077ED] rounded transition-colors shadow-2xs cursor-pointer"
                       @click="evolutionStore.openGapModal(gap)"
                     >
                       转建工单
@@ -181,16 +181,16 @@
                     <button
                       type="button"
                       :disabled="actionLoadingId === gap.id"
-                      class="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors disabled:opacity-50"
-                      title="标记此问题已闭环"
-                      @click="handleResolve(gap)"
+                      class="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors disabled:opacity-50 cursor-pointer"
+                      title="审核并标记此问题已闭环"
+                      @click="openResolveModal(gap)"
                     >
                       解决
                     </button>
                     <button
                       type="button"
                       :disabled="actionLoadingId === gap.id"
-                      class="px-2 py-1 text-[11px] font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 rounded transition-colors disabled:opacity-50"
+                      class="px-2 py-1 text-[11px] font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 rounded transition-colors disabled:opacity-50 cursor-pointer"
                       title="忽略此缺口提问"
                       @click="handleIgnore(gap)"
                     >
@@ -202,7 +202,7 @@
                   <template v-else-if="gap.status === 'CONVERTED'">
                     <button
                       type="button"
-                      class="px-2 py-1 text-[11px] font-medium text-blue-600 hover:text-blue-800 transition-colors"
+                      class="px-2 py-1 text-[11px] font-medium text-blue-600 hover:text-blue-800 transition-colors cursor-pointer"
                       @click="evolutionStore.openGapModal(gap)"
                     >
                       查看工单
@@ -210,8 +210,8 @@
                     <button
                       type="button"
                       :disabled="actionLoadingId === gap.id"
-                      class="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors disabled:opacity-50"
-                      @click="handleResolve(gap)"
+                      class="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200 transition-colors disabled:opacity-50 cursor-pointer"
+                      @click="openResolveModal(gap)"
                     >
                       完成闭环
                     </button>
@@ -223,11 +223,29 @@
                       <Check :size="12" />
                       <span>已闭环</span>
                     </span>
+                    <button
+                      type="button"
+                      :disabled="actionLoadingId === gap.id"
+                      class="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded border border-amber-200 transition-colors disabled:opacity-50 cursor-pointer"
+                      title="重新恢复为待转建状态"
+                      @click="handleReopen(gap)"
+                    >
+                      重新激活
+                    </button>
                   </template>
 
                   <!-- Case 4: IGNORED (已忽略) -->
                   <template v-else-if="gap.status === 'IGNORED' || gap.status === 'DISMISSED'">
                     <span class="text-[11px] text-slate-400 font-medium">已归档忽略</span>
+                    <button
+                      type="button"
+                      :disabled="actionLoadingId === gap.id"
+                      class="px-2 py-1 text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 transition-colors disabled:opacity-50 cursor-pointer"
+                      title="撤销忽略并重新激活"
+                      @click="handleReopen(gap)"
+                    >
+                      重新激活
+                    </button>
                   </template>
                 </div>
               </td>
@@ -280,6 +298,86 @@
         </div>
       </div>
     </div>
+
+    <!-- 知识缺口闭环审核弹窗 (BUG-05) -->
+    <div
+      v-if="showResolveModal && targetResolveGap"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+    >
+      <div class="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div class="flex items-center gap-2">
+            <div class="w-7 h-7 rounded-md bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xs">
+              <Check :size="15" />
+            </div>
+            <div>
+              <h3 class="text-sm font-semibold text-slate-900">知识缺口闭环审核</h3>
+              <p class="text-[11px] text-slate-500">确认已通过知识补全或FAQ发布解决该盲区</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="text-slate-400 hover:text-slate-600 p-1 rounded transition-colors cursor-pointer"
+            @click="closeResolveModal"
+          >
+            <X :size="16" />
+          </button>
+        </div>
+
+        <div class="p-5 flex flex-col gap-4">
+          <!-- 缺口问题概要 -->
+          <div class="bg-slate-50 rounded-lg p-3 border border-slate-100 flex flex-col gap-1">
+            <span class="text-[11px] text-slate-400">待闭环问题 (频次 {{ targetResolveGap.hit_count }} 次)</span>
+            <span class="text-xs font-medium text-slate-800 break-words">{{ targetResolveGap.query_text }}</span>
+          </div>
+
+          <!-- 闭环处置途径 -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-medium text-slate-700">闭环处置途径</label>
+            <select
+              v-model="resolveForm.resolution_type"
+              class="h-9 px-3 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#0071E3] focus:ring-2 focus:ring-[#0071E3]/20"
+            >
+              <option value="KNOWLEDGE_BASE_UPDATED">已补齐知识库文档/切片</option>
+              <option value="FAQ_PUBLISHED">已转建并发布官方标准FAQ</option>
+              <option value="POLICY_CLARIFIED">制度已明确线下答复员工</option>
+              <option value="OTHER">其他合规处置方式</option>
+            </select>
+          </div>
+
+          <!-- 审核闭环意见 -->
+          <div class="flex flex-col gap-1.5">
+            <label class="text-xs font-medium text-slate-700">闭环审核说明 / 关联工单凭据</label>
+            <textarea
+              v-model="resolveForm.audit_note"
+              rows="3"
+              placeholder="请输入闭环处置依据或对应知识切片编号（例如：已在《企业通用差旅报销制度》补充更新相应条款）..."
+              class="w-full p-2.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#0071E3] focus:ring-2 focus:ring-[#0071E3]/20 resize-none text-slate-800 placeholder-slate-400"
+            ></textarea>
+          </div>
+        </div>
+
+        <!-- 弹窗底部操作栏 -->
+        <div class="px-5 py-3.5 bg-slate-50/80 border-t border-slate-100 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+            @click="closeResolveModal"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            :disabled="isSubmittingResolve"
+            class="px-3.5 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg shadow-sm shadow-emerald-600/20 flex items-center gap-1.5 transition-colors cursor-pointer"
+            @click="submitResolve"
+          >
+            <Loader2 v-if="isSubmittingResolve" :size="13" class="animate-spin" />
+            <span>确认闭环审核</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -289,8 +387,8 @@
  * 模块: FE-M5 (PAGE-06)
  */
 
-import { ref } from 'vue'
-import { AlertCircle, CheckCircle2, Check } from 'lucide-vue-next'
+import { ref, reactive } from 'vue'
+import { AlertCircle, CheckCircle2, Check, X, Loader2 } from 'lucide-vue-next'
 import { useEvolutionStore } from '@/stores/evolution'
 import type { KnowledgeGap } from '@/types/evolution'
 
@@ -301,6 +399,57 @@ const emit = defineEmits<{
 }>()
 
 const actionLoadingId = ref<number | null>(null)
+
+// 闭环审核确认弹窗状态 (BUG-05)
+const showResolveModal = ref(false)
+const targetResolveGap = ref<KnowledgeGap | null>(null)
+const isSubmittingResolve = ref(false)
+const resolveForm = reactive({
+  resolution_type: 'KNOWLEDGE_BASE_UPDATED',
+  audit_note: ''
+})
+
+const openResolveModal = (gap: KnowledgeGap) => {
+  targetResolveGap.value = gap
+  resolveForm.resolution_type = 'KNOWLEDGE_BASE_UPDATED'
+  resolveForm.audit_note = `经审核，针对提问【${gap.query_text}】已补齐标准知识库规范并生效。`
+  showResolveModal.value = true
+}
+
+const closeResolveModal = () => {
+  showResolveModal.value = false
+  targetResolveGap.value = null
+}
+
+const submitResolve = async () => {
+  if (!targetResolveGap.value) return
+  isSubmittingResolve.value = true
+  const gap = targetResolveGap.value
+  try {
+    await evolutionStore.resolveKnowledgeGap(gap.id, {
+      resolution_type: resolveForm.resolution_type,
+      audit_note: resolveForm.audit_note
+    })
+    emit('toast', `知识缺口 [${gap.query_text}] 闭环审核已通过并完成归档`, 'success')
+    closeResolveModal()
+  } catch (err) {
+    emit('toast', err instanceof Error ? err.message : '闭环审核失败', 'error')
+  } finally {
+    isSubmittingResolve.value = false
+  }
+}
+
+const handleReopen = async (gap: KnowledgeGap) => {
+  actionLoadingId.value = gap.id
+  try {
+    await evolutionStore.reopenKnowledgeGap(gap.id)
+    emit('toast', `知识缺口 [${gap.query_text}] 已重新激活为待转建状态`, 'success')
+  } catch (err) {
+    emit('toast', err instanceof Error ? err.message : '重新激活失败', 'error')
+  } finally {
+    actionLoadingId.value = null
+  }
+}
 
 const setGapFilter = (status: string) => {
   evolutionStore.gapStatusFilter = status
@@ -314,18 +463,6 @@ const setSortBy = (sortBy: 'hit_count' | 'created_at') => {
 
 const changePage = (page: number) => {
   evolutionStore.fetchKnowledgeGaps(page)
-}
-
-const handleResolve = async (gap: KnowledgeGap) => {
-  actionLoadingId.value = gap.id
-  try {
-    await evolutionStore.resolveKnowledgeGap(gap.id)
-    emit('toast', `知识缺口 [${gap.query_text}] 已成功标记为解决闭环`, 'success')
-  } catch (err) {
-    emit('toast', err instanceof Error ? err.message : '标记解决失败', 'error')
-  } finally {
-    actionLoadingId.value = null
-  }
 }
 
 const handleIgnore = async (gap: KnowledgeGap) => {

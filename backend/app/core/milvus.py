@@ -259,10 +259,60 @@ class MilvusService:
                 limit=top_k,
                 output_fields=["chunk_id", "document_id"],
             )
-            return search_res[0] if search_res else []
+            raw_hits = search_res[0] if search_res else []
+            normalized_hits = []
+            for h in raw_hits:
+                # 兼容 remote Milvus 的主键字段 (chunk_id) 与 mock collection 的 id
+                c_id = h.get("id") or h.get("chunk_id")
+                if c_id is None and isinstance(h.get("entity"), dict):
+                    c_id = h["entity"].get("chunk_id")
+                if c_id is not None:
+                    hit_dict = dict(h)
+                    hit_dict["id"] = int(c_id)
+                    hit_dict["chunk_id"] = int(c_id)
+                    normalized_hits.append(hit_dict)
+            return normalized_hits
         except Exception as e:
             logger.error(f"[MilvusService] Search failed: {e}")
             return []
+
+    async def warm_up_from_database(self, db_session) -> int:
+        """从数据库预热加载已有切片向量至 Milvus (无论是远程独立实例还是本地保真集合)"""
+        from app.models.knowledge import KnowledgeChunk
+        from app.providers.embedding import default_embedding_provider
+        from sqlalchemy import select
+
+        # 检查是否已有切片数据
+        if self._is_mock or self._client is None:
+            existing_count = len(self._mock_collection.records) if self._mock_collection else 0
+        else:
+            try:
+                probe = self._client.query(self.collection_name, filter="chunk_id >= 0", limit=1)
+                existing_count = len(probe)
+            except Exception:
+                existing_count = 0
+
+        if existing_count > 0:
+            return 0
+
+        stmt = select(KnowledgeChunk).where(KnowledgeChunk.is_deleted == False)
+        res = await db_session.execute(stmt)
+        chunks = res.scalars().all()
+        if not chunks:
+            return 0
+
+        data = []
+        for c in chunks:
+            emb = await default_embedding_provider.get_embedding(c.content)
+            data.append({
+                "chunk_id": c.id,
+                "document_id": c.document_id,
+                "embedding": emb,
+            })
+        if data:
+            self.insert_chunks(data)
+            logger.info(f"[MilvusService] Warmed up and synchronized {len(data)} chunks into collection '{self.collection_name}'.")
+        return len(data)
 
 
 # 单例实例

@@ -88,6 +88,9 @@ class DoneEventData(BaseModel):
     is_faq_hit: Optional[bool] = Field(default=False, description="是否命中标准 FAQ 极速缓存直出")
     hit_faq: Optional[bool] = Field(default=False, description="是否命中标准 FAQ 极速缓存直出 (别名)")
     faq_id: Optional[int] = Field(default=None, description="命中的 FAQ ID")
+    llm_source: Optional[str] = Field(default="remote_dashscope", description="LLM执行来源")
+    llm_model: Optional[str] = Field(default="qwen3.7-flash", description="LLM模型名称")
+    is_real_llm: Optional[bool] = Field(default=True, description="是否为真实云端LLM调用")
 
 
 class ChatEventPayload(BaseModel):

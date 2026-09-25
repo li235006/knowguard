@@ -239,18 +239,18 @@ async def test_seed_accounts_and_claims(client: AsyncClient, db_session: AsyncSe
     assert zs_profile["dept_name"] == "研发部"
     assert zs_profile["role_code"] == "ROLE_COMMON_USER"
 
-    # 2. 验证李四 (10087/财务部/部门经理/123456)
+    # 2. 验证李四 (10087/财务部/知识管理员/123456)
     ls_res = await client.post("/api/v1/auth/login", json={"username": "10087", "password": "123456"})
     assert ls_res.status_code == 200
     ls_data = ls_res.json()["data"]
     ls_claims = decode_token(ls_data["access_token"])
     assert ls_claims["real_name"] == "李四"
     assert ls_claims["dept_name"] == "财务部"
-    assert ls_claims["role_code"] == "ROLE_DEPT_MANAGER"
+    assert ls_claims["role_code"] == "ROLE_KNOWLEDGE_ADMIN"
 
     ls_me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {ls_data['access_token']}"})
     assert ls_me.status_code == 200
-    assert ls_me.json()["data"]["role_code"] == "ROLE_DEPT_MANAGER"
+    assert ls_me.json()["data"]["role_code"] == "ROLE_KNOWLEDGE_ADMIN"
 
     # 3. 验证王五 (10088/管理层/系统管理员/123456)
     ww_res = await client.post("/api/v1/auth/login", json={"username": "10088", "password": "123456"})

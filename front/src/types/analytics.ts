@@ -104,6 +104,9 @@ export interface AuditLogItem {
   recalled_count: number
   allowed_count: number
   restricted_count: number
+  recalled_chunk_ids?: number[]
+  allowed_chunk_ids?: number[]
+  restricted_chunk_ids?: number[]
   is_blocked: boolean
   verdict_type: 'BLOCKED' | 'ALLOWED' | 'FAQ_HIT'
   verdict_badge_text: string
@@ -113,4 +116,5 @@ export interface AuditLogItem {
   sha256_hash: string
   chunk_verdicts?: ChunkVerdict[]
   waterfall?: LatencyWaterfallStep[]
+  latency_waterfall?: LatencyWaterfallStep[]
 }

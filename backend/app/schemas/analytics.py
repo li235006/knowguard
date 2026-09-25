@@ -36,6 +36,14 @@ class DashboardSummaryResponse(BaseModel):
     faq_cache_hit_rate: float = Field(default=0.0, description="FAQ 极速缓存直出命中率百分比 (0.0~100.0)")
     avg_latency_ms: float = Field(default=0.0, description="端到端平均响应耗时 (ms)")
     total_tokens: int = Field(default=0, description="累计消耗 Token 总数")
+    pv_uv_delta: Optional[str] = Field(default="0% 较昨日", description="PV/UV环比增量标签")
+    units_synced: Optional[int] = Field(default=0, description="已同步知识单元数")
+    units_pending: Optional[int] = Field(default=0, description="待更新知识单元数")
+    tokens_saved: Optional[str] = Field(default="节约 0 Token", description="节约Token数描述")
+    p95_latency_ms: Optional[float] = Field(default=0.0, description="P95响应延时")
+    p99_latency: Optional[str] = Field(default="0ms", description="P99响应延时")
+    unresolved_gaps_count: Optional[int] = Field(default=0, description="待闭环知识缺口")
+    unresolved_gaps_delta: Optional[str] = Field(default="0个 本周新增", description="待闭环缺口增量")
 
     @model_validator(mode="after")
     def sync_aliases(self) -> "DashboardSummaryResponse":
@@ -53,6 +61,8 @@ class DashboardSummaryResponse(BaseModel):
             self.pending_gaps = self.open_gaps
         if self.knowledge_gaps_count is None:
             self.knowledge_gaps_count = self.open_gaps
+        if self.unresolved_gaps_count is None or self.unresolved_gaps_count == 0:
+            self.unresolved_gaps_count = self.open_gaps
         return self
 
 
@@ -60,15 +70,25 @@ class DashboardSummaryResponse(BaseModel):
 DashboardSummary = DashboardSummaryResponse
 
 
+class LatencyBucketResponse(BaseModel):
+    """端到端响应耗时区间统计模型 (适配 ECharts/前端柱状图)"""
+    label: str = Field(..., description="延时区间标签，如 < 50ms (FAQ直出)")
+    percent: float = Field(default=0.0, description="占比百分比 (0.0~100.0)")
+    count: int = Field(default=0, description="该区间命中日志条数")
+    sub_label: Optional[str] = Field(default=None, description="子标签说明")
+
+
 class TrendPoint(BaseModel):
     """每日 Token 消耗与延时趋势走势数据点"""
     date: str = Field(..., description="日期 (YYYY-MM-DD)")
+    time: Optional[str] = Field(default=None, description="时间标签 (如 MM-DD 或 HH:MM)")
     prompt_tokens: int = Field(default=0, description="输入 Prompt Tokens")
     completion_tokens: int = Field(default=0, description="输出 Completion Tokens")
     total_tokens: int = Field(default=0, description="当日消耗 Token 总量")
     latency_ms: float = Field(default=0.0, description="当日平均延时毫秒")
     avg_latency_ms: Optional[float] = Field(default=None, description="当日平均延时 (别名)")
     pv: int = Field(default=0, description="当日提问量")
+    qps: Optional[float] = Field(default=0.0, description="当日峰值 QPS (次/秒)")
 
     @model_validator(mode="after")
     def sync_latency(self) -> "TrendPoint":
@@ -76,6 +96,8 @@ class TrendPoint(BaseModel):
             self.avg_latency_ms = self.latency_ms
         elif self.latency_ms == 0.0 and self.avg_latency_ms is not None:
             self.latency_ms = self.avg_latency_ms
+        if not self.time and self.date:
+            self.time = self.date[5:] if len(self.date) >= 10 else self.date
         return self
 
 
@@ -125,6 +147,8 @@ class AuditLogResponse(BaseModel):
     employee_id: Optional[str] = Field(default=None, description="员工工号")
     user_dept: Optional[str] = Field(default=None, description="所属部门")
     user_role: Optional[str] = Field(default=None, description="所属角色")
+    dept_name: Optional[str] = Field(default=None, description="所属部门 (别名)")
+    role_name: Optional[str] = Field(default=None, description="所属角色 (别名)")
     query_text: str = Field(..., description="用户提问内容")
     query: Optional[str] = Field(default=None, description="用户提问内容 (别名)")
     answer_snippet: Optional[str] = Field(default=None, description="答复摘要或兜底提示")
@@ -139,8 +163,14 @@ class AuditLogResponse(BaseModel):
     prompt_tokens: int = Field(default=0, description="输入消耗 Tokens")
     completion_tokens: int = Field(default=0, description="输出消耗 Tokens")
     total_tokens: int = Field(default=0, description="总消耗 Tokens")
+    tokens: Optional[int] = Field(default=None, description="总消耗 Tokens (别名)")
     latency_ms: float = Field(default=0.0, description="调用处理耗时 (ms)")
     created_at: Optional[datetime] = Field(default=None, description="记录发生时间")
+    time: Optional[str] = Field(default=None, description="格式化时间字符串")
+    verdict_type: Optional[str] = Field(default=None, description="安全裁决类型 (BLOCKED/ALLOWED/FAQ_HIT)")
+    verdict_badge_text: Optional[str] = Field(default=None, description="安全裁决徽章文案")
+    sha256_hash: Optional[str] = Field(default=None, description="存证哈希指纹")
+    silent_intercept_triggered: Optional[bool] = Field(default=False, description="是否触发静默防越权脱敏")
     evidence_chain: Optional[Dict[str, Any]] = Field(default=None, description="完整下钻安全证据链明细")
 
     @model_validator(mode="after")
@@ -149,6 +179,33 @@ class AuditLogResponse(BaseModel):
             self.query = self.query_text
         elif not self.query_text and self.query:
             self.query_text = self.query
+
+        if not self.dept_name and self.user_dept:
+            self.dept_name = self.user_dept
+        if not self.role_name and self.user_role:
+            self.role_name = self.user_role
+
+        if self.tokens is None:
+            self.tokens = self.total_tokens
+
+        if not self.time and self.created_at:
+            self.time = self.created_at.strftime("%H:%M:%S")
+
+        if not self.verdict_type:
+            if self.is_blocked:
+                self.verdict_type = "BLOCKED"
+                self.verdict_badge_text = f"阻断 {self.restricted_count} (4D越权)"
+                self.silent_intercept_triggered = True
+            elif self.latency_ms < 50 and not self.recalled_chunk_ids:
+                self.verdict_type = "FAQ_HIT"
+                self.verdict_badge_text = "⚡ FAQ 命中直出"
+            else:
+                self.verdict_type = "ALLOWED"
+                self.verdict_badge_text = "✓ 4D全部放行"
+
+        if not self.sha256_hash and self.trace_id:
+            import hashlib
+            self.sha256_hash = hashlib.sha256(f"{self.trace_id}_{self.id}".encode()).hexdigest()
         return self
 
 

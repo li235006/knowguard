@@ -65,6 +65,7 @@ export const connectSseStream = async (options: ConnectSseOptions): Promise<void
       if (done) break
 
       buffer += decoder.decode(value, { stream: true })
+      buffer = buffer.replace(/\r\n/g, '\n')
       const blocks = buffer.split('\n\n')
       // 保留最后一个可能尚未完整的 chunk 放入 buffer
       buffer = blocks.pop() || ''
@@ -79,9 +80,9 @@ export const connectSseStream = async (options: ConnectSseOptions): Promise<void
 
         for (const line of lines) {
           if (line.startsWith('event:')) {
-            eventType = line.replace('event:', '').trim()
+            eventType = line.slice(6).trim()
           } else if (line.startsWith('data:')) {
-            dataString = line.replace('data:', '').trim()
+            dataString = line.slice(5).trim()
           }
         }
 
@@ -91,9 +92,10 @@ export const connectSseStream = async (options: ConnectSseOptions): Promise<void
           const parsedData = JSON.parse(dataString)
 
           if (eventType === 'text_delta') {
-            const data = parsedData as TextDeltaEventData
-            if (data.delta) {
-              onTextDelta(data.delta)
+            const data = parsedData as TextDeltaEventData & { text?: string }
+            const deltaText = data.delta ?? data.text ?? ''
+            if (deltaText) {
+              onTextDelta(deltaText)
             }
           } else if (eventType === 'citation') {
             const data = parsedData as CitationItem
