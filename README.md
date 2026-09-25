@@ -1,7 +1,7 @@
 # KnowGuard 智能知识库管理平台
 
 <p align="center">
-  <img src="项目工程文件/原型图/operations_analytics.png" alt="KnowGuard Dashboard" width="820" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);" />
+  <img src="./docs/images/operations_analytics.png" alt="KnowGuard Dashboard" width="820" />
 </p>
 
 <p align="center">
@@ -151,8 +151,11 @@ uv sync
 # 或使用标准 pip:
 # python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 
-# 初始化数据库结构与基础种子数据 (部门、角色、测试账号)
+# 初始化数据库结构与基础种子数据 (二选一):
+# 方式 A (内置环境 / 极速开箱):
 uv run python scripts/seed.py
+# 方式 B (独立 MySQL 8.0+ 导入):
+# mysql -u root -p < sql/init.sql
 
 # 启动后端 API 服务 (端口: 8000)
 uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -218,6 +221,12 @@ knowguard/
 │   │   └── types/                  # 全局 TypeScript 契约定义
 │   ├── package.json
 │   └── vite.config.ts
+│
+├── sql/                            # 数据库建表与初始化 DDL / Seed 脚本
+│   └── init.sql                    # 包含 14 张核心表结构与默认种子数据 (MySQL 8.0+)
+│
+├── docs/                           # 官方文档静态资源
+│   └── images/                     # 架构图、封面图与原型展示图
 │
 ├── 项目工程文件/                    # 产品设计资产与架构总纲
 │   ├── KNOWGUARD_PRD.md            # 产品需求说明书 (PRD)
